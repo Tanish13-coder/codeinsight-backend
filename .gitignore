@@ -1,0 +1,15 @@
+﻿# Compiled class files
+webapp/WEB-INF/classes/
+
+# Tomcat logs
+*.log
+
+# MySQL connector source (only need the jar)
+lib/mysql-connector-j-9.6.0/
+
+# VS Code
+.vscode/
+
+# OS files
+Thumbs.db
+.DS_Store

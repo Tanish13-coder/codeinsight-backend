@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="https://jakarta.ee/xml/ns/jakartaee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="https://jakarta.ee/xml/ns/jakartaee
+                             https://jakarta.ee/xml/ns/jakartaee/web-app_5_0.xsd"
+         version="5.0">
+
+  <display-name>CodeInsight</display-name>
+
+  <!-- ── Default welcome file ── -->
+  <welcome-file-list>
+    <welcome-file>index.html</welcome-file>
+  </welcome-file-list>
+
+  <!-- ── Session config: 1 hour timeout ── -->
+  <session-config>
+    <session-timeout>60</session-timeout>
+    <cookie-config>
+      <http-only>true</http-only>
+    </cookie-config>
+  </session-config>
+
+  <!-- ── CORS Filter: allow React dev server ── -->
+  <filter>
+    <filter-name>CORSFilter</filter-name>
+    <filter-class>com.codeinsight.filter.CORSFilter</filter-class>
+  </filter>
+  <filter-mapping>
+    <filter-name>CORSFilter</filter-name>
+    <url-pattern>/*</url-pattern>
+  </filter-mapping>
+
+  <!-- ── Character encoding filter ── -->
+  <filter>
+    <filter-name>EncodingFilter</filter-name>
+    <filter-class>com.codeinsight.filter.EncodingFilter</filter-class>
+  </filter>
+  <filter-mapping>
+    <filter-name>EncodingFilter</filter-name>
+    <url-pattern>/*</url-pattern>
+  </filter-mapping>
+
+  <!-- ── Servlet mappings (annotation-based, listed here for clarity) ── -->
+  <servlet>
+    <servlet-name>LoginServlet</servlet-name>
+    <servlet-class>com.codeinsight.servlet.LoginServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>LoginServlet</servlet-name>
+    <url-pattern>/login</url-pattern>
+  </servlet-mapping>
+
+  <servlet>
+    <servlet-name>RegisterServlet</servlet-name>
+    <servlet-class>com.codeinsight.servlet.RegisterServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>RegisterServlet</servlet-name>
+    <url-pattern>/Register</url-pattern>
+  </servlet-mapping>
+
+  <servlet>
+    <servlet-name>ProblemsServlet</servlet-name>
+    <servlet-class>com.codeinsight.servlet.ProblemsServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>ProblemsServlet</servlet-name>
+    <url-pattern>/problems</url-pattern>
+  </servlet-mapping>
+
+  <servlet>
+    <servlet-name>SubmitServlet</servlet-name>
+    <servlet-class>com.codeinsight.servlet.SubmitServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>SubmitServlet</servlet-name>
+    <url-pattern>/submit</url-pattern>
+  </servlet-mapping>
+
+  <servlet>
+    <servlet-name>LeaderboardServlet</servlet-name>
+    <servlet-class>com.codeinsight.servlet.LeaderboardServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>LeaderboardServlet</servlet-name>
+    <url-pattern>/leaderboard</url-pattern>
+  </servlet-mapping>
+
+  <servlet>
+    <servlet-name>UserServlet</servlet-name>
+    <servlet-class>com.codeinsight.servlet.UserServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>UserServlet</servlet-name>
+    <url-pattern>/user</url-pattern>
+  </servlet-mapping>
+
+  <web-app xmlns="https://jakarta.ee/xml/ns/jakartaee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="https://jakarta.ee/xml/ns/jakartaee
+                             https://jakarta.ee/xml/ns/jakartaee/web-app_5_0.xsd"
+         version="5.0"
+         metadata-complete="true">
+
+<servlet>
+    <servlet-name>AIInsightServlet</servlet-name>
+    <servlet-class>com.codeinsight.servlet.AIInsightServlet</servlet-class>
+</servlet>
+<servlet-mapping>
+    <servlet-name>AIInsightServlet</servlet-name>
+    <url-pattern>/ai-insight</url-pattern>
+</servlet-mapping>
+
+
+</web-app>
