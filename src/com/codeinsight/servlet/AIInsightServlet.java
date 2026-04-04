@@ -17,7 +17,9 @@ import org.json.JSONObject;
 
 public class AIInsightServlet extends HttpServlet {
 
-    private static final String GEMINI_API_KEY = "AIzaSyDZFIO94SRY3KlYd1uzu-ifrZAZ-PVFYlc";
+    private static final String GEMINI_API_KEY = System.getenv("GEMINI_API_KEY") != null
+            ? System.getenv("GEMINI_API_KEY")
+            : "AIzaSyDZFIO94SRY3KlYd1uzu-ifrZAZ-PVFYlc";
     private static final String GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="
             + GEMINI_API_KEY;
 
@@ -63,13 +65,8 @@ public class AIInsightServlet extends HttpServlet {
                 return;
             }
 
-            // ── Build Gemini prompt ──
             String prompt = buildPrompt(code, problem, verdict);
-
-            // ── Call Gemini API ──
             String geminiResponse = callGemini(prompt);
-
-            // ── Parse response ──
             JSONObject parsed = parseGeminiResponse(geminiResponse);
 
             result.put("success", true);
@@ -132,7 +129,6 @@ public class AIInsightServlet extends HttpServlet {
     private String callGemini(String prompt) throws Exception {
         HttpClient client = HttpClient.newHttpClient();
 
-        // Build request body
         JSONObject textPart = new JSONObject().put("text", prompt);
         JSONArray parts = new JSONArray().put(textPart);
         JSONObject content = new JSONObject().put("parts", parts);
@@ -158,7 +154,6 @@ public class AIInsightServlet extends HttpServlet {
             System.out.println("[AI] Full Gemini response: " + rawResponse);
 
             JSONObject root = new JSONObject(rawResponse);
-
             String text = root
                     .getJSONArray("candidates")
                     .getJSONObject(0)
@@ -170,13 +165,11 @@ public class AIInsightServlet extends HttpServlet {
 
             System.out.println("[AI] Extracted text: " + text);
 
-            // Aggressively clean markdown
             text = text
                     .replaceAll("(?s)```json", "")
                     .replaceAll("(?s)```", "")
                     .trim();
 
-            // Find the JSON object inside the text
             int start = text.indexOf("{");
             int end = text.lastIndexOf("}");
             if (start != -1 && end != -1 && end > start) {
@@ -184,7 +177,6 @@ public class AIInsightServlet extends HttpServlet {
             }
 
             System.out.println("[AI] Cleaned text: " + text.substring(0, Math.min(300, text.length())));
-
             return new JSONObject(text);
 
         } catch (Exception e) {
@@ -201,6 +193,7 @@ public class AIInsightServlet extends HttpServlet {
             return fallback;
         }
     }
+
     @Override
     protected void doOptions(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
@@ -211,7 +204,10 @@ public class AIInsightServlet extends HttpServlet {
     }
 
     private void setCorsHeaders(HttpServletResponse response) {
-        response.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
+        String origin = System.getenv("FRONTEND_URL") != null
+                ? System.getenv("FRONTEND_URL")
+                : "http://localhost:3000";
+        response.setHeader("Access-Control-Allow-Origin", origin);
         response.setHeader("Access-Control-Allow-Credentials", "true");
     }
 }

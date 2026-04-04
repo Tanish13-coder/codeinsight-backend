@@ -6,9 +6,17 @@ import java.sql.SQLException;
 
 public class DBConnection {
 
-    private static final String URL      = "jdbc:mysql://localhost:3306/codeinsight_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
-    private static final String USER     = "root";       // change to your MySQL username
-    private static final String PASSWORD = "Tanish@2004";       // change to your MySQL password
+    private static final String URL = System.getenv("DB_URL") != null
+            ? System.getenv("DB_URL")
+            : "jdbc:mysql://localhost:3306/codeinsight_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
+
+    private static final String USER = System.getenv("DB_USER") != null
+            ? System.getenv("DB_USER")
+            : "root";
+
+    private static final String PASSWORD = System.getenv("DB_PASS") != null
+            ? System.getenv("DB_PASS")
+            : "Tanish@2004";
 
     private static Connection connection = null;
 
