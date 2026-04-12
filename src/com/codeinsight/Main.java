@@ -6,6 +6,7 @@ import org.apache.tomcat.util.descriptor.web.FilterDef;
 import org.apache.tomcat.util.descriptor.web.FilterMap;
 
 import com.codeinsight.servlet.*;
+import com.codeinsight.servlet.RunServlet;
 import com.codeinsight.filter.*;
 
 import java.io.File;
@@ -44,6 +45,9 @@ public class Main {
 
         Tomcat.addServlet(ctx, "AIInsightServlet", new AIInsightServlet());
         ctx.addServletMappingDecoded("/ai-insight", "AIInsightServlet");
+
+        Tomcat.addServlet(ctx, "RunServlet", new RunServlet());
+        ctx.addServletMappingDecoded("/run", "RunServlet");
 
         FilterDef corsFilter = new FilterDef();
         corsFilter.setFilterName("CORSFilter");

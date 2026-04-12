@@ -83,7 +83,6 @@ public class SubmitServlet extends HttpServlet {
             }
 
             String problemTitle = probRs.getString("title");
-            String problemDifficulty = probRs.getString("difficulty");
             probRs.close();
             probPs.close();
 
@@ -96,8 +95,8 @@ public class SubmitServlet extends HttpServlet {
             JSONArray testCases = new JSONArray();
             while (tcRs.next()) {
                 JSONObject tc = new JSONObject();
-                tc.put("input", tcRs.getString("input"));
-                tc.put("expected", tcRs.getString("expected"));
+                tc.put("input", tcRs.getString("input") != null ? tcRs.getString("input") : "");
+                tc.put("expected", tcRs.getString("expected") != null ? tcRs.getString("expected") : "");
                 testCases.put(tc);
             }
             tcRs.close();
@@ -106,48 +105,58 @@ public class SubmitServlet extends HttpServlet {
             int total = testCases.length();
             int passed = 0;
             String verdict = "Wrong Answer";
-            long runtime = 0;
+            long totalRuntime = 0;
             String runOutput = "";
             String runError = "";
 
-            System.out.println("[Submit] Running code for problem: " + problemTitle
+            System.out.println("[Submit] Judging: " + problemTitle
                     + " | User: " + username
                     + " | Test cases: " + total);
 
-            // ── Run code ONCE and judge output line by line ──
-            RunResult runResult = CodeRunner.run(code);
-            runtime = runResult.runtimeMs;
-            runOutput = runResult.output;
-            runError = runResult.error;
-
-            if (!runResult.success) {
-                // Compilation error or runtime error
-                verdict = runResult.verdict;
-
-            } else if (total == 0) {
-                // No test cases — just check it compiles and runs
-                verdict = "Accepted";
+            if (total == 0) {
+                // No test cases — compile and run, accept if no error
+                RunResult runResult = CodeRunner.run(code, "");
+                totalRuntime = runResult.runtimeMs;
+                runError = runResult.error;
+                if (!runResult.success) {
+                    verdict = runResult.verdict;
+                    runOutput = runResult.output;
+                } else {
+                    verdict = "Accepted";
+                    runOutput = runResult.output;
+                }
 
             } else {
-                // Split output into lines and compare each line to expected
-                String[] outputLines = runResult.output.trim().split("\\n");
-
+                // ── Run once per test case with its specific input ──
                 for (int i = 0; i < total; i++) {
                     JSONObject tc = testCases.getJSONObject(i);
-                    String expected = tc.getString("expected").trim();
-                    String actual = i < outputLines.length
-                            ? outputLines[i].trim()
-                            : "";
+                    String tcInput    = tc.getString("input").trim();
+                    String tcExpected = tc.getString("expected").trim();
+
+                    RunResult runResult = CodeRunner.run(code, tcInput);
+                    totalRuntime += runResult.runtimeMs;
 
                     System.out.println("[Submit] TC " + (i + 1)
-                            + " | Expected: " + expected
-                            + " | Got: " + actual);
+                            + " | Input: " + tcInput
+                            + " | Expected: " + tcExpected
+                            + " | Got: " + runResult.output.trim()
+                            + " | Verdict: " + runResult.verdict);
 
-                    if (actual.equals(expected)) {
+                    if (!runResult.success) {
+                        verdict    = runResult.verdict;
+                        runError   = runResult.error;
+                        runOutput  = runResult.output;
+                        break;
+                    }
+
+                    String actual = runResult.output.trim();
+                    if (actual.equals(tcExpected)) {
                         passed++;
                     } else {
-                        verdict = "Wrong Answer";
-                        runOutput = "Expected: " + expected + "\nGot:      " + actual;
+                        verdict   = "Wrong Answer";
+                        runOutput = "Test Case " + (i + 1) + "\nInput:    " + tcInput
+                                  + "\nExpected: " + tcExpected
+                                  + "\nGot:      " + actual;
                         break;
                     }
                 }
@@ -157,11 +166,11 @@ public class SubmitServlet extends HttpServlet {
                 }
             }
 
-            System.out.println("[Submit] Verdict: " + verdict
+            System.out.println("[Submit] Final: " + verdict
                     + " | Passed: " + passed + "/" + total
-                    + " | Runtime: " + runtime + "ms");
+                    + " | Runtime: " + totalRuntime + "ms");
 
-            // ── Save submission to DB ──
+            // ── Save submission ──
             String insertSql = "INSERT INTO submissions "
                     + "(user_id, problem_id, code, language, verdict, runtime_ms) "
                     + "VALUES (?, ?, ?, ?, ?, ?)";
@@ -171,25 +180,24 @@ public class SubmitServlet extends HttpServlet {
             insertPs.setString(3, code);
             insertPs.setString(4, language);
             insertPs.setString(5, verdict);
-            insertPs.setLong(6, runtime);
+            insertPs.setLong(6, totalRuntime);
             insertPs.executeUpdate();
             insertPs.close();
 
-            // ── Update leaderboard if accepted ──
+            // ── Update leaderboard on first Accepted ──
             if ("Accepted".equals(verdict)) {
                 updateLeaderboard(conn, userId, problemId);
             }
 
-            // ── Build response ──
             result.put("success", true);
             result.put("verdict", verdict);
-            result.put("runtime", runtime > 0 ? runtime + " ms" : "-");
+            result.put("runtime", totalRuntime > 0 ? totalRuntime + " ms" : "-");
             result.put("passed", passed);
             result.put("total", total);
             result.put("problemTitle", problemTitle);
             result.put("output", runOutput);
             result.put("error", runError);
-            result.put("message", buildMessage(verdict, passed, total, runtime));
+            result.put("message", buildMessage(verdict, passed, total, totalRuntime));
 
         } catch (Exception e) {
             response.setStatus(500);
@@ -203,7 +211,7 @@ public class SubmitServlet extends HttpServlet {
         out.flush();
     }
 
-    // ── GET: fetch submissions ──
+    // ── GET: fetch submissions (admin sees all, user sees own) ──
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
@@ -237,7 +245,7 @@ public class SubmitServlet extends HttpServlet {
                         + "FROM submissions s "
                         + "JOIN users u    ON s.user_id    = u.id "
                         + "JOIN problems p ON s.problem_id = p.id "
-                        + "ORDER BY s.created_at DESC LIMIT 100";
+                        + "ORDER BY s.created_at DESC LIMIT 200";
                 ps = conn.prepareStatement(sql);
             } else {
                 String sql = "SELECT s.id, u.username, p.title AS problem, "
@@ -300,6 +308,7 @@ public class SubmitServlet extends HttpServlet {
 
     private void updateLeaderboard(Connection conn, int userId, int problemId) {
         try {
+            // Count how many Accepted submissions exist for this user+problem AFTER this insert
             String checkSql = "SELECT COUNT(*) AS cnt FROM submissions "
                     + "WHERE user_id = ? AND problem_id = ? AND verdict = 'Accepted'";
             PreparedStatement checkPs = conn.prepareStatement(checkSql);
@@ -308,13 +317,12 @@ public class SubmitServlet extends HttpServlet {
             ResultSet checkRs = checkPs.executeQuery();
 
             int count = 0;
-            if (checkRs.next())
-                count = checkRs.getInt("cnt");
+            if (checkRs.next()) count = checkRs.getInt("cnt");
             checkRs.close();
             checkPs.close();
 
-            // Only update on FIRST accept
-            if (count <= 1) {
+            // Only award points on the FIRST accepted submission for this problem
+            if (count == 1) {
                 String upsert = "INSERT INTO leaderboard (user_id, score, solved) "
                         + "VALUES (?, 100, 1) "
                         + "ON DUPLICATE KEY UPDATE "
@@ -323,7 +331,8 @@ public class SubmitServlet extends HttpServlet {
                 lbPs.setInt(1, userId);
                 lbPs.executeUpdate();
                 lbPs.close();
-                System.out.println("[Submit] Leaderboard updated for userId=" + userId);
+                System.out.println("[Submit] Leaderboard +100pts for userId=" + userId
+                        + " problemId=" + problemId);
             }
         } catch (Exception e) {
             System.err.println("[Submit] Leaderboard error: " + e.getMessage());
@@ -333,7 +342,9 @@ public class SubmitServlet extends HttpServlet {
     private String buildMessage(String verdict, int passed, int total, long runtime) {
         switch (verdict) {
             case "Accepted":
-                return "All " + total + " test cases passed! Runtime: " + runtime + " ms";
+                return total > 0
+                    ? "All " + total + " test cases passed! Runtime: " + runtime + " ms"
+                    : "Code compiled and ran successfully! Runtime: " + runtime + " ms";
             case "Wrong Answer":
                 return "Failed on test case " + (passed + 1) + " of " + total + ".";
             case "Compilation Error":
@@ -352,17 +363,17 @@ public class SubmitServlet extends HttpServlet {
         long minutes = diff / 60000;
         long hours = minutes / 60;
         long days = hours / 24;
-        if (minutes < 1)
-            return "just now";
-        if (minutes < 60)
-            return minutes + "m ago";
-        if (hours < 24)
-            return hours + "h ago";
+        if (minutes < 1) return "just now";
+        if (minutes < 60) return minutes + "m ago";
+        if (hours < 24)   return hours + "h ago";
         return days + "d ago";
     }
 
     private void setCorsHeaders(HttpServletResponse response) {
-        response.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
+        String origin = System.getenv("FRONTEND_URL") != null
+                ? System.getenv("FRONTEND_URL")
+                : "http://localhost:5173";
+        response.setHeader("Access-Control-Allow-Origin", origin);
         response.setHeader("Access-Control-Allow-Credentials", "true");
     }
 }
