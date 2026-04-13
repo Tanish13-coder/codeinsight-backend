@@ -32,7 +32,15 @@ public class ReviewServlet extends HttpServlet {
 
         try {
             Connection conn = DBConnection.getConnection();
-            String sql = "SELECT id, username, rating, text, role, created_at FROM reviews WHERE approved = true ORDER BY created_at DESC";
+
+            boolean allReviews = "true".equals(request.getParameter("all"));
+            HttpSession session = request.getSession(false);
+            boolean isAdmin = session != null && "admin".equals(session.getAttribute("role"));
+
+            String sql = (allReviews && isAdmin)
+                ? "SELECT id, username, rating, text, role, approved, created_at FROM reviews ORDER BY created_at DESC"
+                : "SELECT id, username, rating, text, role, approved, created_at FROM reviews WHERE approved = true ORDER BY created_at DESC";
+
             PreparedStatement ps = conn.prepareStatement(sql);
             ResultSet rs = ps.executeQuery();
 
@@ -44,6 +52,7 @@ public class ReviewServlet extends HttpServlet {
                 r.put("rating", rs.getInt("rating"));
                 r.put("text", rs.getString("text"));
                 r.put("role", rs.getString("role") != null ? rs.getString("role") : "");
+                r.put("approved", rs.getBoolean("approved"));
                 r.put("created_at", rs.getString("created_at") != null ? rs.getString("created_at").substring(0, 10) : "");
                 reviews.put(r);
             }
