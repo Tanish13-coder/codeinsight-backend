@@ -50,6 +50,9 @@ public class Main {
         Tomcat.addServlet(ctx, "AIInsightServlet", new AIInsightServlet());
         ctx.addServletMappingDecoded("/ai-insight", "AIInsightServlet");
 
+        Tomcat.addServlet(ctx, "ReviewServlet", new ReviewServlet());
+        ctx.addServletMappingDecoded("/reviews", "ReviewServlet");
+
         FilterDef corsFilter = new FilterDef();
         corsFilter.setFilterName("CORSFilter");
         corsFilter.setFilter(new CORSFilter());
