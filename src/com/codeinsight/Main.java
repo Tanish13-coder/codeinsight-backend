@@ -21,11 +21,12 @@ public class Main {
         tomcat.setPort(port);
         tomcat.setBaseDir(System.getProperty("java.io.tmpdir"));
 
-        // Use empty temp dir — servlets registered programmatically, not via web.xml
         String webappDir = System.getProperty("java.io.tmpdir");
         Context ctx = tomcat.addContext("/codeinsight", webappDir);
 
+        // ✅ FIX: was "/login" (lowercase) — React calls "/Login"
         Tomcat.addServlet(ctx, "LoginServlet", new LoginServlet());
+        ctx.addServletMappingDecoded("/Login", "LoginServlet");
         ctx.addServletMappingDecoded("/login", "LoginServlet");
 
         Tomcat.addServlet(ctx, "RegisterServlet", new RegisterServlet());
@@ -37,6 +38,9 @@ public class Main {
         Tomcat.addServlet(ctx, "SubmitServlet", new SubmitServlet());
         ctx.addServletMappingDecoded("/submit", "SubmitServlet");
 
+        Tomcat.addServlet(ctx, "RunServlet", new RunServlet());
+         ctx.addServletMappingDecoded("/run", "RunServlet");
+
         Tomcat.addServlet(ctx, "LeaderboardServlet", new LeaderboardServlet());
         ctx.addServletMappingDecoded("/leaderboard", "LeaderboardServlet");
 
@@ -45,9 +49,6 @@ public class Main {
 
         Tomcat.addServlet(ctx, "AIInsightServlet", new AIInsightServlet());
         ctx.addServletMappingDecoded("/ai-insight", "AIInsightServlet");
-
-        Tomcat.addServlet(ctx, "RunServlet", new RunServlet());
-        ctx.addServletMappingDecoded("/run", "RunServlet");
 
         FilterDef corsFilter = new FilterDef();
         corsFilter.setFilterName("CORSFilter");
@@ -58,6 +59,7 @@ public class Main {
         corsMap.addURLPattern("/*");
         ctx.addFilterMap(corsMap);
 
+        // Encoding Filter
         FilterDef encFilter = new FilterDef();
         encFilter.setFilterName("EncodingFilter");
         encFilter.setFilter(new EncodingFilter());

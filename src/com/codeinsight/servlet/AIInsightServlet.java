@@ -5,55 +5,131 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-
-import org.json.JSONArray;
-import org.json.JSONObject;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
 
 public class AIInsightServlet extends HttpServlet {
 
-    private static final String GEMINI_API_KEY = System.getenv("GEMINI_API_KEY") != null
-            ? System.getenv("GEMINI_API_KEY")
-            : "AIzaSyDZFIO94SRY3KlYd1uzu-ifrZAZ-PVFYlc";
-
+    private static final String GEMINI_API_KEY = initGeminiApiKey();
     private static final String GEMINI_URL =
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="
-            + GEMINI_API_KEY;
+                    + GEMINI_API_KEY;
+    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(25))
+            .build();
+
+    private static String initGeminiApiKey() {
+        Optional<String> dotenvKey = findGeminiKeyInDotEnv();
+        if (dotenvKey.isPresent()) {
+            return dotenvKey.get();
+        }
+        String envKey = System.getenv("GEMINI_API_KEY");
+        if (envKey != null && !envKey.isBlank()) {
+            return envKey.trim();
+        }
+        return "AIzaSyAZgUiB1FVbZVegfjd0ySu7Om0tgzaPYrI";
+    }
+
+    private static Optional<String> findGeminiKeyInDotEnv() {
+        Path path = Paths.get(".").toAbsolutePath().normalize();
+        for (int i = 0; i < 5 && path != null; i++) {
+            Path envFile = path.resolve(".env");
+            if (Files.exists(envFile)) {
+                try {
+                    List<String> lines = Files.readAllLines(envFile);
+                    for (String line : lines) {
+                        String trimmed = line.trim();
+                        if (trimmed.startsWith("GEMINI_API_KEY=")) {
+                            String value = trimmed.substring("GEMINI_API_KEY=".length()).trim();
+                            if (!value.isBlank()) {
+                                return Optional.of(value);
+                            }
+                        }
+                    }
+                } catch (IOException ignored) {
+                }
+            }
+            path = path.getParent();
+        }
+        return Optional.empty();
+    }
 
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
-
-        setCorsHeaders(response);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
+        setCorsHeaders(response);
 
-        PrintWriter out = response.getWriter();
         JSONObject result = new JSONObject();
 
-        HttpSession session = request.getSession(false);
-        if (session == null || session.getAttribute("userId") == null) {
-            response.setStatus(401);
+        if (GEMINI_API_KEY == null || GEMINI_API_KEY.isBlank()) {
+            response.setStatus(503);
             result.put("success", false);
-            result.put("message", "Please log in to use AI Insight.");
-            out.print(result);
+            result.put("message", "AI service is not configured. GEMINI_API_KEY is missing.");
+            response.getWriter().print(result);
             return;
         }
 
         StringBuilder sb = new StringBuilder();
-        BufferedReader reader = request.getReader();
-        String line;
-        while ((line = reader.readLine()) != null)
-            sb.append(line);
+        try (BufferedReader reader = request.getReader()) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line);
+            }
+        }
+
+        JSONObject body;
+        try {
+            body = new JSONObject(sb.toString());
+        } catch (Exception e) {
+            response.setStatus(400);
+            result.put("success", false);
+            result.put("message", "Invalid JSON body.");
+            response.getWriter().print(result);
+            return;
+        }
+
+        int userId = -1;
+        String username = "unknown";
+        HttpSession session = request.getSession(false);
+        if (session != null && session.getAttribute("userId") != null) {
+            Object raw = session.getAttribute("userId");
+            userId = (raw instanceof Integer) ? (Integer) raw : Integer.parseInt(raw.toString());
+            username = session.getAttribute("username") != null
+                    ? session.getAttribute("username").toString()
+                    : "unknown";
+        } else {
+            int bodyUserId = body.optInt("userId", -1);
+            if (bodyUserId > 0) {
+                userId = bodyUserId;
+                username = body.optString("username", "unknown");
+            }
+        }
+
+        if (userId == -1) {
+            response.setStatus(401);
+            result.put("success", false);
+            result.put("message", "Please log in.");
+            response.getWriter().print(result);
+            return;
+        }
 
         try {
-            JSONObject body = new JSONObject(sb.toString());
-            String code    = body.optString("code", "").trim();
+            String code = body.optString("code", "").trim();
             String problem = body.optString("problem", "").trim();
             String verdict = body.optString("verdict", "").trim();
 
@@ -61,31 +137,26 @@ public class AIInsightServlet extends HttpServlet {
                 response.setStatus(400);
                 result.put("success", false);
                 result.put("message", "Code is required.");
-                out.print(result);
+                response.getWriter().print(result);
                 return;
             }
 
             String prompt = buildPrompt(code, problem, verdict);
-
-            // Call Gemini — throws on non-200 response
             String geminiResponse = callGemini(prompt);
-
-            // Parse — throws on bad JSON
             JSONObject parsed = parseGeminiResponse(geminiResponse);
 
             result.put("success", true);
-            result.put("explanation",   parsed.optString("explanation",   ""));
+            result.put("explanation", parsed.optString("explanation", "No explanation available."));
             result.put("errorAnalysis", parsed.optString("errorAnalysis", ""));
-            result.put("errorFix",      parsed.optString("errorFix",      ""));
-            result.put("concepts",      parsed.optString("concepts",      ""));
-            result.put("timeComplex",   parsed.optString("timeComplex",   ""));
-            result.put("spaceComplex",  parsed.optString("spaceComplex",  ""));
-            result.put("complexity",    parsed.optString("complexity",    ""));
-            result.put("suggestions",   parsed.optString("suggestions",   ""));
+            result.put("errorFix", parsed.optString("errorFix", ""));
+            result.put("concepts", parsed.optString("concepts", ""));
+            result.put("timeComplex", parsed.optString("timeComplex", ""));
+            result.put("spaceComplex", parsed.optString("spaceComplex", ""));
+            result.put("complexity", parsed.optString("complexity", ""));
+            result.put("suggestions", parsed.optString("suggestions", ""));
             result.put("optimizedCode", parsed.optString("optimizedCode", ""));
 
-            System.out.println("[AI] Insight generated for user: " + session.getAttribute("username"));
-
+            System.out.println("[AI] Insight generated for user: " + username);
         } catch (Exception e) {
             response.setStatus(500);
             result.put("success", false);
@@ -93,67 +164,52 @@ public class AIInsightServlet extends HttpServlet {
             System.err.println("[AI] Error: " + e.getMessage());
         }
 
-        out.print(result);
-        out.flush();
+        response.getWriter().print(result);
+        response.getWriter().flush();
     }
 
     private String buildPrompt(String code, String problem, String verdict) {
         boolean hasError = verdict != null && (
-            verdict.contains("Error") || verdict.contains("TLE") || verdict.contains("Wrong")
+                verdict.contains("Error") || verdict.contains("TLE") || verdict.contains("Wrong")
         );
 
         String errorSection = hasError
-            ? """
-              IMPORTANT: The code has a verdict of "%s". You MUST:
-              1. In "errorAnalysis": Clearly explain WHY this error is happening in simple words.
-                 If it is a Compilation Error — explain the syntax mistake.
-                 If it is a Runtime Error — explain what caused the crash (null pointer, array out of bounds, etc.).
-                 If it is TLE — explain why the code is too slow and what approach to use.
-                 If it is Wrong Answer — explain why the output does not match what was expected.
-              2. In "errorFix": Give the corrected code with comments explaining what was changed and why.
-              """.formatted(verdict)
-            : "";
+                ? "IMPORTANT: The code has a verdict of \"" + verdict + "\". You MUST:\n"
+                + "1. In \"errorAnalysis\": Clearly explain WHY this error is happening in simple words.\n"
+                + "   If it is a Compilation Error — explain the syntax mistake.\n"
+                + "   If it is a Runtime Error — explain what caused the crash (null pointer, array out of bounds, etc.).\n"
+                + "   If it is TLE — explain why the code is too slow and what approach to use.\n"
+                + "   If it is Wrong Answer — explain why the output does not match what was expected.\n"
+                + "2. In \"errorFix\": Give the corrected code with comments explaining what was changed and why.\n\n"
+                : "";
 
-        return """
-                You are a friendly coding teacher explaining Java code to a complete beginner.
-                Your goal is to make everything so simple that even someone who has never coded
-                before can understand it. Use simple words, real-life analogies, and examples.
-                Avoid technical jargon — if you must use a technical term, explain it immediately.
+        String problemLine = problem.isEmpty() ? "Not specified" : problem;
+        String verdictLine = verdict.isEmpty() ? "Not submitted yet" : verdict;
 
-                Problem: %s
-                Verdict: %s
-
-                %s
-
-                Code to analyze:
-                %s
-
-                Respond with ONLY this JSON (no markdown, no extra text):
-                {
-                  "explanation": "Explain what this code does like you are telling a story to a 10-year-old. Start with 'This code...' and walk through it step by step in plain English. Use a real-life analogy. Mention what the main method does, what the logic does, and what the final answer/output is. Write 5-7 sentences minimum.",
-
-                  "errorAnalysis": "If the verdict is an error (Compilation Error, Runtime Error, Wrong Answer, TLE), explain exactly why the error is happening in very simple English. If no error, write 'No errors detected. Your code ran successfully!'",
-
-                  "errorFix": "If there is an error, provide the corrected Java code with comments explaining every fix. If no error, write 'No fix needed.'",
-
-                  "concepts": "List the concepts/data structures used. After each one write a simple bracket explanation. Example: HashMap (like a dictionary where you store word and its meaning), For Loop (like repeating a task until you are done), Array (like a row of boxes each holding one number)",
-
-                  "timeComplex": "State the time complexity like O(n) then explain it in one simple sentence using a real-life analogy.",
-
-                  "spaceComplex": "State the space complexity like O(n) then explain it simply.",
-
-                  "complexity": "Write a full friendly explanation of the performance covering time complexity, space complexity, best case, and worst case. Use bullet points separated by newlines.",
-
-                  "suggestions": "Give exactly 3 improvement suggestions numbered 1. 2. 3. Each must have a short title in caps, why it is a problem, and how to fix it.",
-
-                  "optimizedCode": "Provide the improved Java code with detailed comments on every line explaining what it does in plain English."
-                }
-                """.formatted(problem, verdict, errorSection, code);
+        return "You are a friendly coding teacher explaining Java code to a complete beginner.\n"
+                + "Your goal is to make everything so simple that even someone who has never coded\n"
+                + "before can understand it. Use simple words, real-life analogies, and examples.\n"
+                + "Avoid technical jargon — if you must use a technical term, explain it immediately.\n\n"
+                + "Problem: " + problemLine + "\n"
+                + "Verdict: " + verdictLine + "\n\n"
+                + errorSection
+                + "Code to analyze:\n" + code + "\n\n"
+                + "Respond with ONLY this JSON (no markdown, no extra text).\n"
+                + "Use this exact structure:\n"
+                + "{\n"
+                + "  \"explanation\": \"...\",\n"
+                + "  \"errorAnalysis\": \"...\",\n"
+                + "  \"errorFix\": \"...\",\n"
+                + "  \"concepts\": \"...\",\n"
+                + "  \"timeComplex\": \"...\",\n"
+                + "  \"spaceComplex\": \"...\",\n"
+                + "  \"complexity\": \"...\",\n"
+                + "  \"suggestions\": \"...\",\n"
+                + "  \"optimizedCode\": \"...\"\n"
+                + "}";
     }
 
     private String callGemini(String prompt) throws Exception {
-        HttpClient client = HttpClient.newHttpClient();
-
         JSONObject requestBody = new JSONObject()
                 .put("contents", new JSONArray()
                         .put(new JSONObject()
@@ -163,10 +219,11 @@ public class AIInsightServlet extends HttpServlet {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(URI.create(GEMINI_URL))
                 .header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(25))
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
                 .build();
 
-        HttpResponse<String> httpResponse = client.send(
+        HttpResponse<String> httpResponse = HTTP_CLIENT.send(
                 httpRequest, HttpResponse.BodyHandlers.ofString());
 
         System.out.println("[AI] Gemini status: " + httpResponse.statusCode());
@@ -184,8 +241,6 @@ public class AIInsightServlet extends HttpServlet {
                 + rawResponse.substring(0, Math.min(500, rawResponse.length())));
 
         JSONObject root = new JSONObject(rawResponse);
-
-        // Check for Gemini error payload
         if (root.has("error")) {
             throw new Exception("Gemini error: " + root.getJSONObject("error").optString("message", rawResponse));
         }
@@ -199,12 +254,10 @@ public class AIInsightServlet extends HttpServlet {
                 .getString("text")
                 .trim();
 
-        // Strip markdown code fences if present
         text = text.replaceAll("(?s)```json\\s*", "").replaceAll("(?s)```", "").trim();
 
-        // Extract outermost JSON object
         int start = text.indexOf("{");
-        int end   = text.lastIndexOf("}");
+        int end = text.lastIndexOf("}");
         if (start == -1 || end == -1 || end <= start) {
             throw new Exception("Gemini response did not contain valid JSON. Got: "
                     + text.substring(0, Math.min(200, text.length())));

@@ -14,11 +14,31 @@ import java.io.PrintWriter;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.SQLException;
 
 import org.json.JSONObject;
 
+@WebServlet("/Login") // URL is now /codeinsight/Login
 public class LoginServlet extends HttpServlet {
+
+    // Allow requests from both Vite (5173) and CRA (3000)
+    private static final String[] ALLOWED_ORIGINS = {
+            "http://localhost:5173",
+            "http://localhost:3000",
+            "http://localhost:5174"
+    };
+
+    private void setCORSHeaders(HttpServletRequest request, HttpServletResponse response) {
+        String origin = request.getHeader("Origin");
+        if (origin != null) {
+            for (String allowed : ALLOWED_ORIGINS) {
+                if (allowed.equalsIgnoreCase(origin)) {
+                    response.setHeader("Access-Control-Allow-Origin", origin);
+                    response.setHeader("Access-Control-Allow-Credentials", "true");
+                    break;
+                }
+            }
+        }
+    }
 
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response)
@@ -26,18 +46,18 @@ public class LoginServlet extends HttpServlet {
 
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
-        setCorsHeaders(response);
+        setCORSHeaders(request, response);
 
         PrintWriter out = response.getWriter();
+        JSONObject result = new JSONObject();
 
         // Read JSON body
         StringBuilder sb = new StringBuilder();
-        BufferedReader reader = request.getReader();
-        String line;
-        while ((line = reader.readLine()) != null)
-            sb.append(line);
-
-        JSONObject result = new JSONObject();
+        try (BufferedReader reader = request.getReader()) {
+            String line;
+            while ((line = reader.readLine()) != null)
+                sb.append(line);
+        }
 
         try {
             JSONObject body = new JSONObject(sb.toString());
@@ -64,12 +84,11 @@ public class LoginServlet extends HttpServlet {
                 String uname = rs.getString("username");
                 String role = rs.getString("role");
 
-                // Create session
                 HttpSession session = request.getSession(true);
                 session.setAttribute("userId", userId);
                 session.setAttribute("username", uname);
                 session.setAttribute("role", role);
-                session.setMaxInactiveInterval(60 * 60); // 1 hour
+                session.setMaxInactiveInterval(60 * 60);
 
                 result.put("success", true);
                 result.put("message", "Login successful.");
@@ -77,7 +96,7 @@ public class LoginServlet extends HttpServlet {
                 result.put("username", uname);
                 result.put("role", role);
 
-                System.out.println("[Login] User logged in: " + uname + " | Role: " + role);
+                System.out.println("[Login] Success: " + uname + " | Role: " + role);
             } else {
                 response.setStatus(401);
                 result.put("success", false);
@@ -101,17 +120,9 @@ public class LoginServlet extends HttpServlet {
     @Override
     protected void doOptions(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
-        setCorsHeaders(response);
+        setCORSHeaders(request, response);
         response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
         response.setHeader("Access-Control-Allow-Headers", "Content-Type");
         response.setStatus(200);
-    }
-
-    private void setCorsHeaders(HttpServletResponse response) {
-        String origin = System.getenv("FRONTEND_URL") != null
-                ? System.getenv("FRONTEND_URL")
-                : "http://localhost:5173";
-        response.setHeader("Access-Control-Allow-Origin", origin);
-        response.setHeader("Access-Control-Allow-Credentials", "true");
     }
 }
