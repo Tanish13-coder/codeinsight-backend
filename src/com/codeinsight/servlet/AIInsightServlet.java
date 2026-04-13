@@ -74,13 +74,15 @@ public class AIInsightServlet extends HttpServlet {
             JSONObject parsed = parseGeminiResponse(geminiResponse);
 
             result.put("success", true);
-            result.put("explanation",  parsed.optString("explanation",  ""));
-            result.put("concepts",     parsed.optString("concepts",     ""));
-            result.put("timeComplex",  parsed.optString("timeComplex",  ""));
-            result.put("spaceComplex", parsed.optString("spaceComplex", ""));
-            result.put("complexity",   parsed.optString("complexity",   ""));
-            result.put("suggestions",  parsed.optString("suggestions",  ""));
-            result.put("optimizedCode",parsed.optString("optimizedCode",""));
+            result.put("explanation",   parsed.optString("explanation",   ""));
+            result.put("errorAnalysis", parsed.optString("errorAnalysis", ""));
+            result.put("errorFix",      parsed.optString("errorFix",      ""));
+            result.put("concepts",      parsed.optString("concepts",      ""));
+            result.put("timeComplex",   parsed.optString("timeComplex",   ""));
+            result.put("spaceComplex",  parsed.optString("spaceComplex",  ""));
+            result.put("complexity",    parsed.optString("complexity",    ""));
+            result.put("suggestions",   parsed.optString("suggestions",   ""));
+            result.put("optimizedCode", parsed.optString("optimizedCode", ""));
 
             System.out.println("[AI] Insight generated for user: " + session.getAttribute("username"));
 
@@ -96,6 +98,22 @@ public class AIInsightServlet extends HttpServlet {
     }
 
     private String buildPrompt(String code, String problem, String verdict) {
+        boolean hasError = verdict != null && (
+            verdict.contains("Error") || verdict.contains("TLE") || verdict.contains("Wrong")
+        );
+
+        String errorSection = hasError
+            ? """
+              IMPORTANT: The code has a verdict of "%s". You MUST:
+              1. In "errorAnalysis": Clearly explain WHY this error is happening in simple words.
+                 If it is a Compilation Error — explain the syntax mistake.
+                 If it is a Runtime Error — explain what caused the crash (null pointer, array out of bounds, etc.).
+                 If it is TLE — explain why the code is too slow and what approach to use.
+                 If it is Wrong Answer — explain why the output does not match what was expected.
+              2. In "errorFix": Give the corrected code with comments explaining what was changed and why.
+              """.formatted(verdict)
+            : "";
+
         return """
                 You are a friendly coding teacher explaining Java code to a complete beginner.
                 Your goal is to make everything so simple that even someone who has never coded
@@ -105,12 +123,18 @@ public class AIInsightServlet extends HttpServlet {
                 Problem: %s
                 Verdict: %s
 
+                %s
+
                 Code to analyze:
                 %s
 
                 Respond with ONLY this JSON (no markdown, no extra text):
                 {
-                  "explanation": "Explain what this code does like you are telling a story to a 10-year-old. Start with 'This code...' and walk through it step by step in plain English. Use a real-life analogy (like comparing a HashMap to a notebook or dictionary). Mention what the main method does, what the logic does, and what the final answer/output is. Write 5-7 sentences minimum.",
+                  "explanation": "Explain what this code does like you are telling a story to a 10-year-old. Start with 'This code...' and walk through it step by step in plain English. Use a real-life analogy. Mention what the main method does, what the logic does, and what the final answer/output is. Write 5-7 sentences minimum.",
+
+                  "errorAnalysis": "If the verdict is an error (Compilation Error, Runtime Error, Wrong Answer, TLE), explain exactly why the error is happening in very simple English. If no error, write 'No errors detected. Your code ran successfully!'",
+
+                  "errorFix": "If there is an error, provide the corrected Java code with comments explaining every fix. If no error, write 'No fix needed.'",
 
                   "concepts": "List the concepts/data structures used. After each one write a simple bracket explanation. Example: HashMap (like a dictionary where you store word and its meaning), For Loop (like repeating a task until you are done), Array (like a row of boxes each holding one number)",
 
@@ -124,7 +148,7 @@ public class AIInsightServlet extends HttpServlet {
 
                   "optimizedCode": "Provide the improved Java code with detailed comments on every line explaining what it does in plain English."
                 }
-                """.formatted(problem, verdict, code);
+                """.formatted(problem, verdict, errorSection, code);
     }
 
     private String callGemini(String prompt) throws Exception {

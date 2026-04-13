@@ -7,7 +7,7 @@ import java.util.concurrent.*;
 public class CodeRunner {
 
     private static final String TEMP_DIR    = System.getProperty("java.io.tmpdir") + File.separator + "codeinsight";
-    private static final int    TIMEOUT_SEC = 5;
+    private static final int    TIMEOUT_SEC = 10;
 
     public static class RunResult {
         public boolean success;
@@ -127,7 +127,7 @@ public class CodeRunner {
 
             if (!finished) {
                 process.destroyForcibly();
-                return new RunResult(false, "", "Time Limit Exceeded.", runtime, "TLE");
+                return new RunResult(false, "", "Time Limit Exceeded (10s).", runtime, "TLE");
             }
 
             String stdout = stdoutFuture.get(2, TimeUnit.SECONDS);
