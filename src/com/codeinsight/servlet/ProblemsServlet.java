@@ -2,6 +2,7 @@ package com.codeinsight.servlet;
 
 import com.codeinsight.util.DBConnection;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -14,33 +15,18 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
-import java.util.Set;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class ProblemsServlet extends HttpServlet {
 
-    // ── FIX: support all dev ports ──
-    private static final Set<String> ALLOWED = Set.of(
-            "http://localhost:3000",
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://localhost:4173");
-
-    private void setCorsHeaders(HttpServletRequest request, HttpServletResponse response) {
-        String origin = request.getHeader("Origin");
-        if (origin != null && ALLOWED.contains(origin)) {
-            response.setHeader("Access-Control-Allow-Origin", origin);
-            response.setHeader("Access-Control-Allow-Credentials", "true");
-        }
-    }
-
+    // ── GET: fetch all problems (for users) or single problem by id ──
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
 
-        setCorsHeaders(request, response);
+        setCorsHeaders(response);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
 
@@ -50,86 +36,116 @@ public class ProblemsServlet extends HttpServlet {
         try {
             Connection conn = DBConnection.getConnection();
 
+            // Single problem fetch
             if (idParam != null) {
                 int problemId = Integer.parseInt(idParam);
-                PreparedStatement ps = conn.prepareStatement("SELECT * FROM problems WHERE id = ?");
+
+                String sql = "SELECT * FROM problems WHERE id = ?";
+                PreparedStatement ps = conn.prepareStatement(sql);
                 ps.setInt(1, problemId);
                 ResultSet rs = ps.executeQuery();
 
                 if (rs.next()) {
                     JSONObject prob = buildProblemObject(rs);
 
-                    PreparedStatement tcPs = conn.prepareStatement(
-                            "SELECT input, expected FROM test_cases WHERE problem_id = ?");
+                    // Fetch test cases for this problem
+                    String tcSql = "SELECT input, expected FROM test_cases WHERE problem_id = ?";
+                    PreparedStatement tcPs = conn.prepareStatement(tcSql);
                     tcPs.setInt(1, problemId);
                     ResultSet tcRs = tcPs.executeQuery();
+
                     JSONArray testCases = new JSONArray();
                     while (tcRs.next()) {
-                        testCases.put(new JSONObject()
-                                .put("input", tcRs.getString("input"))
-                                .put("expected", tcRs.getString("expected")));
+                        JSONObject tc = new JSONObject();
+                        tc.put("input", tcRs.getString("input"));
+                        tc.put("expected", tcRs.getString("expected"));
+                        testCases.put(tc);
                     }
                     prob.put("testCases", testCases);
                     tcRs.close();
                     tcPs.close();
+
                     out.print(prob);
                 } else {
                     response.setStatus(404);
-                    out.print(new JSONObject().put("success", false).put("message", "Problem not found."));
+                    out.print(new JSONObject()
+                            .put("success", false)
+                            .put("message", "Problem not found."));
                 }
                 rs.close();
                 ps.close();
 
             } else {
-                // ── FIX: use PreparedStatement instead of string concat (SQL injection risk)
-                // ──
-                String sql = "SELECT id, title, difficulty, tags FROM problems ORDER BY id ASC";
+                // All problems list
+                String difficulty = request.getParameter("difficulty");
+                String search = request.getParameter("search");
+
+                StringBuilder sql = new StringBuilder("SELECT id, title, difficulty, tags FROM problems WHERE 1=1");
+                if (difficulty != null && !difficulty.equals("All")) {
+                    sql.append(" AND difficulty = '").append(difficulty).append("'");
+                }
+                if (search != null && !search.isEmpty()) {
+                    sql.append(" AND title LIKE '%").append(search.replace("'", "''")).append("%'");
+                }
+                sql.append(" ORDER BY id ASC");
+
                 Statement stmt = conn.createStatement();
-                ResultSet rs = stmt.executeQuery(sql);
+                ResultSet rs = stmt.executeQuery(sql.toString());
 
                 JSONArray problems = new JSONArray();
                 while (rs.next()) {
-                    problems.put(new JSONObject()
-                            .put("id", rs.getInt("id"))
-                            .put("title", rs.getString("title"))
-                            .put("difficulty", rs.getString("difficulty"))
-                            .put("tags", rs.getString("tags") != null ? rs.getString("tags") : ""));
+                    JSONObject p = new JSONObject();
+                    p.put("id", rs.getInt("id"));
+                    p.put("title", rs.getString("title"));
+                    p.put("difficulty", rs.getString("difficulty"));
+                    p.put("tags", rs.getString("tags") != null
+                            ? rs.getString("tags")
+                            : "");
+                    problems.put(p);
                 }
                 rs.close();
                 stmt.close();
 
-                out.print(new JSONObject().put("success", true).put("problems", problems));
+                JSONObject result = new JSONObject();
+                result.put("success", true);
+                result.put("problems", problems);
+                out.print(result);
             }
 
         } catch (Exception e) {
             response.setStatus(500);
-            out.print(new JSONObject().put("success", false).put("message", "Server error: " + e.getMessage()));
+            out.print(new JSONObject()
+                    .put("success", false)
+                    .put("message", "Server error: " + e.getMessage()));
             System.err.println("[Problems] GET error: " + e.getMessage());
         }
 
         out.flush();
     }
 
+    // ── POST: admin uploads a new problem ──
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
 
-        setCorsHeaders(request, response);
+        setCorsHeaders(response);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
 
         PrintWriter out = response.getWriter();
         JSONObject result = new JSONObject();
 
-        // HttpSession session = request.getSession(false);
-        // if (session == null || !"admin".equals(session.getAttribute("role"))) {
-        // response.setStatus(403);
-        // result.put("success", false);
-        // result.put("message", "Access denied. Admins only.");
-        // out.print(result);
-        // return;
-        // }
+        // Check admin session
+        HttpSession session = request.getSession(false);
+        if (session == null || !"admin".equals(session.getAttribute("role"))) {
+            response.setStatus(403);
+            result.put("success", false);
+            result.put("message", "Access denied. Admins only.");
+            out.print(result);
+            return;
+        }
 
+        // Read body
         StringBuilder sb = new StringBuilder();
         BufferedReader reader = request.getReader();
         String line;
@@ -155,9 +171,10 @@ public class ProblemsServlet extends HttpServlet {
             }
 
             Connection conn = DBConnection.getConnection();
-            PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO problems (title, description, difficulty, tags, example_input, example_output, constraints) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    Statement.RETURN_GENERATED_KEYS);
+
+            String sql = "INSERT INTO problems (title, description, difficulty, tags, example_input, example_output, constraints) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?)";
+            PreparedStatement ps = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, title);
             ps.setString(2, description);
             ps.setString(3, difficulty);
@@ -167,14 +184,18 @@ public class ProblemsServlet extends HttpServlet {
             ps.setString(7, constraints);
             ps.executeUpdate();
 
+            // Get generated problem ID
             ResultSet keys = ps.getGeneratedKeys();
-            int newId = keys.next() ? keys.getInt(1) : -1;
+            int newId = -1;
+            if (keys.next())
+                newId = keys.getInt(1);
             keys.close();
 
+            // Insert test cases if provided
             JSONArray testCases = body.optJSONArray("testCases");
             if (testCases != null && newId > 0) {
-                PreparedStatement tcPs = conn.prepareStatement(
-                        "INSERT INTO test_cases (problem_id, input, expected) VALUES (?, ?, ?)");
+                String tcSql = "INSERT INTO test_cases (problem_id, input, expected) VALUES (?, ?, ?)";
+                PreparedStatement tcPs = conn.prepareStatement(tcSql);
                 for (int i = 0; i < testCases.length(); i++) {
                     JSONObject tc = testCases.getJSONObject(i);
                     tcPs.setInt(1, newId);
@@ -185,12 +206,13 @@ public class ProblemsServlet extends HttpServlet {
                 tcPs.executeBatch();
                 tcPs.close();
             }
+
             ps.close();
 
             result.put("success", true);
             result.put("message", "Problem uploaded successfully.");
             result.put("problemId", newId);
-            System.out.println("[Problems] New problem: " + title + " id=" + newId);
+            System.out.println("[Problems] New problem uploaded: " + title + " (id=" + newId + ")");
 
         } catch (Exception e) {
             response.setStatus(500);
@@ -203,11 +225,12 @@ public class ProblemsServlet extends HttpServlet {
         out.flush();
     }
 
+    // ── DELETE: admin deletes a problem ──
     @Override
     protected void doDelete(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
 
-        setCorsHeaders(request, response);
+        setCorsHeaders(response);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
 
@@ -227,7 +250,7 @@ public class ProblemsServlet extends HttpServlet {
         if (idParam == null) {
             response.setStatus(400);
             result.put("success", false);
-            result.put("message", "Problem ID required.");
+            result.put("message", "Problem ID is required.");
             out.print(result);
             return;
         }
@@ -235,7 +258,9 @@ public class ProblemsServlet extends HttpServlet {
         try {
             int problemId = Integer.parseInt(idParam);
             Connection conn = DBConnection.getConnection();
-            PreparedStatement ps = conn.prepareStatement("DELETE FROM problems WHERE id = ?");
+
+            String sql = "DELETE FROM problems WHERE id = ?";
+            PreparedStatement ps = conn.prepareStatement(sql);
             ps.setInt(1, problemId);
             int rows = ps.executeUpdate();
             ps.close();
@@ -243,6 +268,7 @@ public class ProblemsServlet extends HttpServlet {
             if (rows > 0) {
                 result.put("success", true);
                 result.put("message", "Problem deleted.");
+                System.out.println("[Problems] Deleted problem id=" + problemId);
             } else {
                 response.setStatus(404);
                 result.put("success", false);
@@ -253,6 +279,7 @@ public class ProblemsServlet extends HttpServlet {
             response.setStatus(500);
             result.put("success", false);
             result.put("message", "Server error: " + e.getMessage());
+            System.err.println("[Problems] DELETE error: " + e.getMessage());
         }
 
         out.print(result);
@@ -262,21 +289,29 @@ public class ProblemsServlet extends HttpServlet {
     @Override
     protected void doOptions(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
-        setCorsHeaders(request, response);
+        setCorsHeaders(response);
         response.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
         response.setHeader("Access-Control-Allow-Headers", "Content-Type");
         response.setStatus(200);
     }
 
+    // ── Helpers ──
     private JSONObject buildProblemObject(ResultSet rs) throws Exception {
-        return new JSONObject()
-                .put("id", rs.getInt("id"))
-                .put("title", rs.getString("title"))
-                .put("description", rs.getString("description"))
-                .put("difficulty", rs.getString("difficulty"))
-                .put("tags", rs.getString("tags") != null ? rs.getString("tags") : "")
-                .put("example_input", rs.getString("example_input") != null ? rs.getString("example_input") : "")
-                .put("example_output", rs.getString("example_output") != null ? rs.getString("example_output") : "")
-                .put("constraints", rs.getString("constraints") != null ? rs.getString("constraints") : "");
+        JSONObject p = new JSONObject();
+        p.put("id", rs.getInt("id"));
+        p.put("title", rs.getString("title"));
+        p.put("description", rs.getString("description"));
+        p.put("difficulty", rs.getString("difficulty"));
+        p.put("tags", rs.getString("tags") != null ? rs.getString("tags") : "");
+        p.put("example_input", rs.getString("example_input") != null ? rs.getString("example_input") : "");
+        p.put("example_output", rs.getString("example_output") != null ? rs.getString("example_output") : "");
+        p.put("constraints", rs.getString("constraints") != null ? rs.getString("constraints") : "");
+        return p;
+    }
+
+    private void setCorsHeaders(HttpServletResponse response) {
+        String origin = System.getenv("FRONTEND_URL") != null ? System.getenv("FRONTEND_URL") : "http://localhost:5173";
+        response.setHeader("Access-Control-Allow-Origin", origin);
+        response.setHeader("Access-Control-Allow-Credentials", "true");
     }
 }

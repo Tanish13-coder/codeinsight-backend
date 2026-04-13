@@ -7,7 +7,7 @@ import java.util.concurrent.*;
 public class CodeRunner {
 
     private static final String TEMP_DIR    = System.getProperty("java.io.tmpdir") + File.separator + "codeinsight";
-    private static final int    TIMEOUT_SEC = 5;
+    private static final int    TIMEOUT_SEC = 10;
 
     public static class RunResult {
         public boolean success;
@@ -25,32 +25,32 @@ public class CodeRunner {
         }
     }
 
+    // Run with no stdin (used for plain run)
     public static RunResult run(String code) {
-        // Ensure temp directory exists
+        return run(code, "");
+    }
+
+    // Run with stdin input (used for judging test cases)
+    public static RunResult run(String code, String input) {
         File tempDir = new File(TEMP_DIR);
         if (!tempDir.exists()) tempDir.mkdirs();
 
-        // Generate unique folder for this submission
         String submissionId = "sub_" + System.currentTimeMillis() + "_" + Thread.currentThread().getId();
         File   subDir       = new File(TEMP_DIR + File.separator + submissionId);
         subDir.mkdirs();
 
-        File javaFile   = new File(subDir, "Solution.java");
-        File classFile  = new File(subDir, "Solution.class");
+        File javaFile = new File(subDir, "Solution.java");
 
         try {
-            // ── Step 1: Write code to file ──
             Files.writeString(javaFile.toPath(), code);
 
-            // ── Step 2: Compile ──
             RunResult compileResult = compile(javaFile, subDir);
             if (!compileResult.success) {
                 cleanup(subDir);
                 return compileResult;
             }
 
-            // ── Step 3: Execute ──
-            RunResult execResult = execute(subDir);
+            RunResult execResult = execute(subDir, input == null ? "" : input);
             cleanup(subDir);
             return execResult;
 
@@ -70,9 +70,7 @@ public class CodeRunner {
             pb.directory(subDir);
             pb.redirectErrorStream(true);
 
-            long    start   = System.currentTimeMillis();
             Process process = pb.start();
-
             String output = readStream(process.getInputStream());
             boolean finished = process.waitFor(TIMEOUT_SEC, TimeUnit.SECONDS);
 
@@ -81,23 +79,21 @@ public class CodeRunner {
                 return new RunResult(false, "", "Compilation timed out.", 0, "Compilation Error");
             }
 
-            int exitCode = process.exitValue();
-            if (exitCode != 0) {
-                // Clean up error message
+            if (process.exitValue() != 0) {
                 String cleanError = output
                     .replace(javaFile.getAbsolutePath(), "Solution.java")
                     .replace(subDir.getAbsolutePath() + File.separator, "");
                 return new RunResult(false, "", cleanError, 0, "Compilation Error");
             }
 
-            return new RunResult(true, "", "", System.currentTimeMillis() - start, "Compiled");
+            return new RunResult(true, "", "", 0, "Compiled");
 
         } catch (Exception e) {
             return new RunResult(false, "", "Compiler not found: " + e.getMessage(), 0, "Compilation Error");
         }
     }
 
-    private static RunResult execute(File subDir) {
+    private static RunResult execute(File subDir, String input) {
         try {
             ProcessBuilder pb = new ProcessBuilder(
                 "java",
@@ -112,7 +108,17 @@ public class CodeRunner {
             long    start   = System.currentTimeMillis();
             Process process = pb.start();
 
-            // Read stdout and stderr concurrently
+            // Write stdin input to the process
+            if (input != null && !input.isEmpty()) {
+                try (OutputStream os = process.getOutputStream()) {
+                    os.write(input.getBytes("UTF-8"));
+                    os.flush();
+                }
+            } else {
+                // Close stdin so code reading from Scanner doesn't block
+                process.getOutputStream().close();
+            }
+
             Future<String> stdoutFuture = readAsync(process.getInputStream());
             Future<String> stderrFuture = readAsync(process.getErrorStream());
 
@@ -121,19 +127,17 @@ public class CodeRunner {
 
             if (!finished) {
                 process.destroyForcibly();
-                return new RunResult(false, "", "Time Limit Exceeded.", runtime, "TLE");
+                return new RunResult(false, "", "Time Limit Exceeded (10s).", runtime, "TLE");
             }
 
-            String stdout = stdoutFuture.get(1, TimeUnit.SECONDS);
-            String stderr = stderrFuture.get(1, TimeUnit.SECONDS);
+            String stdout = stdoutFuture.get(2, TimeUnit.SECONDS);
+            String stderr = stderrFuture.get(2, TimeUnit.SECONDS);
 
-            int exitCode = process.exitValue();
-
-            if (exitCode != 0 && !stderr.isEmpty()) {
-                return new RunResult(false, stdout, stderr, runtime, "Runtime Error");
+            if (process.exitValue() != 0 && !stderr.isEmpty()) {
+                return new RunResult(false, stdout.trim(), stderr.trim(), runtime, "Runtime Error");
             }
 
-            return new RunResult(true, stdout.trim(), stderr, runtime, "Executed");
+            return new RunResult(true, stdout.trim(), stderr.trim(), runtime, "Executed");
 
         } catch (Exception e) {
             return new RunResult(false, "", "Execution error: " + e.getMessage(), 0, "Runtime Error");
@@ -159,8 +163,11 @@ public class CodeRunner {
 
     private static void cleanup(File dir) {
         try {
-            if (dir.exists()) {
-                for (File f : dir.listFiles()) f.delete();
+            if (dir != null && dir.exists()) {
+                File[] files = dir.listFiles();
+                if (files != null) {
+                    for (File f : files) f.delete();
+                }
                 dir.delete();
             }
         } catch (Exception ignored) {}
