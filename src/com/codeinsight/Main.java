@@ -53,6 +53,9 @@ public class Main {
         Tomcat.addServlet(ctx, "ReviewServlet", new ReviewServlet());
         ctx.addServletMappingDecoded("/reviews", "ReviewServlet");
 
+        Tomcat.addServlet(ctx, "AIOptimizeServlet", new AIOptimizeServlet());
+        ctx.addServletMappingDecoded("/ai-optimize", "AIOptimizeServlet");
+
         FilterDef corsFilter = new FilterDef();
         corsFilter.setFilterName("CORSFilter");
         corsFilter.setFilter(new CORSFilter());
