@@ -40,7 +40,7 @@ public class AIInsightServlet extends HttpServlet {
         if (envKey != null && !envKey.isBlank()) {
             return envKey.trim();
         }
-        return "AIzaSyAZgUiB1FVbZVegfjd0ySu7Om0tgzaPYrI";
+        return "AIzaSyCU7Bv9w43WQU-pqCUkjnv5F7rFHYe_Nf0";
     }
 
     private static Optional<String> findGeminiKeyInDotEnv() {
