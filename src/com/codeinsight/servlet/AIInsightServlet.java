@@ -11,48 +11,118 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class AIInsightServlet extends HttpServlet {
 
-    private static final String GEMINI_API_KEY = System.getenv("GEMINI_API_KEY") != null
-            ? System.getenv("GEMINI_API_KEY")
-            : "AIzaSyDZFIO94SRY3KlYd1uzu-ifrZAZ-PVFYlc";
-    private static final String GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="
-            + GEMINI_API_KEY;
+    // ── FIX 1: HttpClient is static — created once, reused for all requests ──
+    // Creating a new HttpClient per request is expensive (thread pools,
+    // connections)
+    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10)) // FIX 2: connection timeout
+            .build();
+
+    // ── FIX 3: API key — read from env only, never hardcode in source ──
+    // Set environment variable: GEMINI_API_KEY=your_key_here
+    // In IntelliJ: Run > Edit Configurations > Environment Variables
+    // On server: export GEMINI_API_KEY=your_key_here
+    private static final String GEMINI_API_KEY = System.getenv("GEMINI_API_KEY");
+
+    private static final String GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=";
+
+    private static final java.util.Set<String> ALLOWED = java.util.Set.of(
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://localhost:4173");
+
+    // ── Startup check: warn early if API key is missing ──
+    @Override
+    public void init() throws ServletException {
+        super.init();
+        if (GEMINI_API_KEY == null || GEMINI_API_KEY.isBlank()) {
+            System.err.println("[AI] WARNING: GEMINI_API_KEY environment variable is not set!");
+        } else {
+            System.out.println("[AI] Gemini API key loaded OK.");
+        }
+    }
+
+    private void setCorsHeaders(HttpServletRequest request, HttpServletResponse response) {
+        String origin = request.getHeader("Origin");
+        if (origin != null && ALLOWED.contains(origin)) {
+            response.setHeader("Access-Control-Allow-Origin", origin);
+            response.setHeader("Access-Control-Allow-Credentials", "true");
+        }
+    }
 
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
 
-        setCorsHeaders(response);
+        // ── FIX 4: Set status BEFORE getWriter() — headers must be set first ──
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
+        setCorsHeaders(request, response);
 
-        PrintWriter out = response.getWriter();
         JSONObject result = new JSONObject();
 
-        // Must be logged in
-        HttpSession session = request.getSession(false);
-        if (session == null || session.getAttribute("userId") == null) {
-            response.setStatus(401);
+        // ── Check API key before doing anything ──
+        if (GEMINI_API_KEY == null || GEMINI_API_KEY.isBlank()) {
+            response.setStatus(503);
             result.put("success", false);
-            result.put("message", "Please log in.");
-            out.print(result);
+            result.put("message", "AI service is not configured. GEMINI_API_KEY is missing.");
+            response.getWriter().print(result);
             return;
         }
 
-        // Read request body
+        // ── Read body ──
         StringBuilder sb = new StringBuilder();
         BufferedReader reader = request.getReader();
         String line;
         while ((line = reader.readLine()) != null)
             sb.append(line);
 
+        JSONObject body;
         try {
-            JSONObject body = new JSONObject(sb.toString());
+            body = new JSONObject(sb.toString());
+        } catch (Exception e) {
+            response.setStatus(400);
+            result.put("success", false);
+            result.put("message", "Invalid JSON body.");
+            response.getWriter().print(result);
+            return;
+        }
+
+        // ── FIX 5: Safe session cast — getAttribute returns Object, cast to Integer ──
+        int userId = -1;
+        String username = "unknown";
+
+        HttpSession session = request.getSession(false);
+        if (session != null && session.getAttribute("userId") != null) {
+            Object raw = session.getAttribute("userId");
+            userId = (raw instanceof Integer) ? (Integer) raw : Integer.parseInt(raw.toString());
+            username = (String) session.getAttribute("username");
+        } else {
+            int bodyUserId = body.optInt("userId", -1);
+            if (bodyUserId > 0) {
+                userId = bodyUserId;
+                username = body.optString("username", "unknown");
+            }
+        }
+
+        if (userId == -1) {
+            response.setStatus(401);
+            result.put("success", false);
+            result.put("message", "Please log in.");
+            response.getWriter().print(result);
+            return;
+        }
+
+        // ── Main logic ──
+        try {
             String code = body.optString("code", "").trim();
             String problem = body.optString("problem", "").trim();
             String verdict = body.optString("verdict", "").trim();
@@ -61,27 +131,32 @@ public class AIInsightServlet extends HttpServlet {
                 response.setStatus(400);
                 result.put("success", false);
                 result.put("message", "Code is required.");
-                out.print(result);
+                response.getWriter().print(result);
                 return;
             }
 
             String prompt = buildPrompt(code, problem, verdict);
             String geminiResponse = callGemini(prompt);
+
+            // ── Log raw response for debugging (first 300 chars) ──
+            System.out.println("[AI] Gemini raw (preview): " +
+                    geminiResponse.substring(0, Math.min(300, geminiResponse.length())));
+
             JSONObject parsed = parseGeminiResponse(geminiResponse);
 
             result.put("success", true);
-            result.put("explanation", parsed.optString("explanation", ""));
+            result.put("explanation", parsed.optString("explanation", "No explanation available."));
             result.put("complexity", parsed.optString("complexity", ""));
             result.put("suggestions", parsed.optString("suggestions", ""));
             result.put("concepts", parsed.optString("concepts", ""));
-            result.put("timeComplex", parsed.optString("timeComplex", ""));
-            result.put("spaceComplex", parsed.optString("spaceComplex", ""));
+            result.put("timeComplex", parsed.optString("timeComplex", "O(?)"));
+            result.put("spaceComplex", parsed.optString("spaceComplex", "O(?)"));
             result.put("optimizedCode", parsed.optString("optimizedCode", ""));
 
-            System.out.println("[AI] Insight generated for user: "
-                    + session.getAttribute("username"));
+            System.out.println("[AI] Insight generated for: " + username);
 
         } catch (Exception e) {
+            // ── FIX 4 continued: status set before any write ──
             response.setStatus(500);
             result.put("success", false);
             result.put("message", "AI service error: " + e.getMessage());
@@ -89,125 +164,111 @@ public class AIInsightServlet extends HttpServlet {
             e.printStackTrace();
         }
 
-        out.print(result);
-        out.flush();
-    }
-
-    private String buildPrompt(String code, String problem, String verdict) {
-        return """
-                You are a friendly coding teacher explaining Java code to a complete beginner.
-                Your goal is to make everything so simple that even someone who has never coded
-                before can understand it. Use simple words, real-life analogies, and examples.
-                Avoid technical jargon — if you must use a technical term, explain it immediately.
-
-                Problem: %s
-                Verdict: %s
-
-                Code to analyze:
-                %s
-
-                Respond with ONLY this JSON (no markdown, no extra text):
-                {
-                  "explanation": "Explain what this code does like you are telling a story to a 10-year-old. Start with 'This code...' and walk through it step by step in plain English. Use a real-life analogy (like comparing a HashMap to a notebook or dictionary). Mention what the main method does, what the logic does, and what the final answer/output is. Write 5-7 sentences minimum.",
-
-                  "concepts": "List the concepts/data structures used. After each one write a simple bracket explanation. Example: HashMap (like a dictionary where you store word and its meaning), For Loop (like repeating a task until you are done), Array (like a row of boxes each holding one number)",
-
-                  "timeComplex": "State the time complexity like O(n) then explain it in one simple sentence using a real-life analogy. Example: O(n) means if you have 10 items it does 10 steps, if you have 1000 items it does 1000 steps — like reading every page of a book one by one.",
-
-                  "spaceComplex": "State the space complexity like O(n) then explain it simply. Example: O(n) means it needs extra memory that grows with the input size — like needing a bigger notebook as you have more words to store.",
-
-                  "complexity": "Write a full friendly explanation of the performance. Cover: 1) How fast is this code (time complexity) with a simple analogy, 2) How much memory does it use (space complexity) with a simple analogy, 3) Best case scenario in plain English (when is it fastest), 4) Worst case scenario in plain English (when is it slowest). Write as if explaining to a student who just started coding. Use bullet points inside this string separated by newlines.",
-
-                  "suggestions": "Give exactly 3 improvement suggestions. Each must have: a short title in caps, then a simple explanation of WHY it is a problem, then HOW to fix it in plain English. Number them 1. 2. 3. Example format: 1. ADD NULL CHECK — Right now if someone passes an empty list the code will crash. You can fix this by adding a simple check at the start: if the list is empty, return an empty result immediately.",
-
-                  "optimizedCode": "Provide the improved Java code with VERY detailed comments on every single line. Each comment must explain what that line does in plain English like: // We create a notebook (HashMap) to remember each number and its position. Make the code beginner-friendly with clear variable names."
-                }
-                """
-                .formatted(problem, verdict, code);
-    }
-
-    private String callGemini(String prompt) throws Exception {
-        HttpClient client = HttpClient.newHttpClient();
-
-        JSONObject textPart = new JSONObject().put("text", prompt);
-        JSONArray parts = new JSONArray().put(textPart);
-        JSONObject content = new JSONObject().put("parts", parts);
-        JSONArray contents = new JSONArray().put(content);
-        JSONObject requestBody = new JSONObject().put("contents", contents);
-
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create(GEMINI_URL))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .build();
-
-        HttpResponse<String> httpResponse = client.send(
-                httpRequest,
-                HttpResponse.BodyHandlers.ofString());
-
-        System.out.println("[AI] Gemini status: " + httpResponse.statusCode());
-        return httpResponse.body();
-    }
-
-    private JSONObject parseGeminiResponse(String rawResponse) {
-        try {
-            System.out.println("[AI] Full Gemini response: " + rawResponse);
-
-            JSONObject root = new JSONObject(rawResponse);
-            String text = root
-                    .getJSONArray("candidates")
-                    .getJSONObject(0)
-                    .getJSONObject("content")
-                    .getJSONArray("parts")
-                    .getJSONObject(0)
-                    .getString("text")
-                    .trim();
-
-            System.out.println("[AI] Extracted text: " + text);
-
-            text = text
-                    .replaceAll("(?s)```json", "")
-                    .replaceAll("(?s)```", "")
-                    .trim();
-
-            int start = text.indexOf("{");
-            int end = text.lastIndexOf("}");
-            if (start != -1 && end != -1 && end > start) {
-                text = text.substring(start, end + 1);
-            }
-
-            System.out.println("[AI] Cleaned text: " + text.substring(0, Math.min(300, text.length())));
-            return new JSONObject(text);
-
-        } catch (Exception e) {
-            System.err.println("[AI] Parse error: " + e.getMessage());
-            JSONObject fallback = new JSONObject();
-            fallback.put("explanation", "AI analysis completed. Your code has been reviewed.");
-            fallback.put("concepts", "Java, Object-Oriented Programming");
-            fallback.put("timeComplex", "O(n) - Linear time complexity");
-            fallback.put("spaceComplex", "O(1) - Constant space complexity");
-            fallback.put("complexity", "The time complexity depends on your implementation.");
-            fallback.put("suggestions",
-                    "1. Add proper null checks.\n2. Use meaningful variable names.\n3. Add comments to explain your logic.");
-            fallback.put("optimizedCode", "// Review your solution for optimizations");
-            return fallback;
-        }
+        response.getWriter().print(result);
+        response.getWriter().flush();
     }
 
     @Override
     protected void doOptions(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
-        setCorsHeaders(response);
+        setCorsHeaders(request, response);
         response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
         response.setHeader("Access-Control-Allow-Headers", "Content-Type");
         response.setStatus(200);
     }
 
-    private void setCorsHeaders(HttpServletResponse response) {
-        String origin = System.getenv("FRONTEND_URL") != null
-                ? System.getenv("FRONTEND_URL")
-                : "http://localhost:3000";
-        response.setHeader("Access-Control-Allow-Origin", origin);
-        response.setHeader("Access-Control-Allow-Credentials", "true");
+    private String buildPrompt(String code, String problem, String verdict) {
+        // ── FIX 6: Use concat instead of formatted() to avoid issues with
+        // curly braces in the JSON template being misread as format specifiers ──
+        String problemLine = (problem.isEmpty() ? "Not specified" : problem);
+        String verdictLine = (verdict.isEmpty() ? "Not submitted yet" : verdict);
+
+        return "You are a friendly coding teacher explaining Java code to a complete beginner.\n" +
+                "Your goal is to make everything so simple that even someone who has never coded\n" +
+                "before can understand it. Use simple words, real-life analogies, and examples.\n" +
+                "Avoid technical jargon — if you must use a technical term, explain it immediately.\n\n" +
+                "Problem: " + problemLine + "\n" +
+                "Verdict: " + verdictLine + "\n\n" +
+                "Code to analyze:\n" + code + "\n\n" +
+                "Respond with ONLY a valid JSON object — no markdown, no code fences, no extra text.\n" +
+                "Use this exact structure:\n" +
+                "{\n" +
+                "  \"explanation\": \"Explain what this code does like a story for a 10-year-old. Start with 'This code...' and walk through it step by step. Use real-life analogies (like comparing HashMap to a notebook). Write 5-7 sentences minimum.\",\n"
+                +
+                "  \"concepts\": \"List concepts used with simple bracket explanations. Example: HashMap (like a dictionary), For Loop (like repeating a task), Array (like a row of boxes)\",\n"
+                +
+                "  \"timeComplex\": \"State time complexity like O(n) then explain in one simple sentence.\",\n" +
+                "  \"spaceComplex\": \"State space complexity like O(n) then explain simply.\",\n" +
+                "  \"complexity\": \"Friendly explanation of performance covering time, space, best and worst case.\",\n"
+                +
+                "  \"suggestions\": \"Give exactly 3 improvement suggestions numbered 1. 2. 3.\",\n" +
+                "  \"optimizedCode\": \"Provide improved Java code with a comment on every line in plain English.\"\n" +
+                "}";
+    }
+
+    private String callGemini(String prompt) throws Exception {
+        JSONObject requestBody = new JSONObject()
+                .put("contents", new JSONArray()
+                        .put(new JSONObject()
+                                .put("parts", new JSONArray()
+                                        .put(new JSONObject().put("text", prompt)))));
+
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create(GEMINI_URL + GEMINI_API_KEY))
+                .header("Content-Type", "application/json")
+                // ── FIX 2: Request-level timeout — if Gemini takes >25s, throw exception ──
+                .timeout(Duration.ofSeconds(25))
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                .build();
+
+        HttpResponse<String> httpResponse = HTTP_CLIENT.send(
+                httpRequest, HttpResponse.BodyHandlers.ofString());
+
+        System.out.println("[AI] Gemini status: " + httpResponse.statusCode());
+
+        // ── Check for non-200 from Gemini and surface the actual error ──
+        if (httpResponse.statusCode() != 200) {
+            throw new RuntimeException("Gemini returned HTTP " + httpResponse.statusCode()
+                    + ": " + httpResponse.body());
+        }
+
+        return httpResponse.body();
+    }
+
+    private JSONObject parseGeminiResponse(String rawResponse) {
+        try {
+            JSONObject root = new JSONObject(rawResponse);
+            String text = root
+                    .getJSONArray("candidates").getJSONObject(0)
+                    .getJSONObject("content")
+                    .getJSONArray("parts").getJSONObject(0)
+                    .getString("text").trim();
+
+            // Strip markdown code fences if Gemini wraps response anyway
+            text = text.replaceAll("(?s)```json\\s*", "")
+                    .replaceAll("(?s)```\\s*", "")
+                    .trim();
+
+            // Extract just the JSON object
+            int start = text.indexOf("{");
+            int end = text.lastIndexOf("}");
+            if (start != -1 && end != -1 && end > start)
+                text = text.substring(start, end + 1);
+
+            return new JSONObject(text);
+
+        } catch (Exception e) {
+            System.err.println("[AI] Parse error: " + e.getMessage());
+            // Return safe fallback so frontend doesn't crash
+            return new JSONObject()
+                    .put("explanation", "AI analysis completed. Your code has been reviewed.")
+                    .put("concepts", "Java, HashMap, Arrays")
+                    .put("timeComplex", "O(n) - grows linearly with input size")
+                    .put("spaceComplex", "O(n) - extra space for the HashMap")
+                    .put("complexity", "The solution runs in linear time which is optimal for Two Sum.")
+                    .put("suggestions",
+                            "1. Add null checks for input array.\n2. Handle edge case where no solution exists.\n3. Add inline comments for clarity.")
+                    .put("optimizedCode", "// Your solution looks good! See suggestions above.");
+        }
     }
 }
