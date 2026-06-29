@@ -5,7 +5,6 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -14,57 +13,27 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Duration;
-import java.util.List;
-import java.util.Optional;
 
+/**
+ * Proxies AI Insight requests to a locally-running Flask service backed by
+ * Ollama (see backend/ai-service/). This replaced an earlier version that
+ * called the Gemini API directly.
+ *
+ * Configure the target with the AI_INSIGHT_URL environment variable;
+ * defaults to http://localhost:8001/insight (see ai-service/README.md for
+ * setup instructions).
+ */
 public class AIInsightServlet extends HttpServlet {
 
-    private static final String GEMINI_API_KEY = initGeminiApiKey();
-    private static final String GEMINI_URL =
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="
-                    + GEMINI_API_KEY;
+    private static final String INSIGHT_SERVICE_URL;
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(25))
+            .connectTimeout(Duration.ofSeconds(15))
             .build();
 
-    private static String initGeminiApiKey() {
-        Optional<String> dotenvKey = findGeminiKeyInDotEnv();
-        if (dotenvKey.isPresent()) {
-            return dotenvKey.get();
-        }
-        String envKey = System.getenv("GEMINI_API_KEY");
-        if (envKey != null && !envKey.isBlank()) {
-            return envKey.trim();
-        }
-        return "AIzaSyCU7Bv9w43WQU-pqCUkjnv5F7rFHYe_Nf0";
-    }
-
-    private static Optional<String> findGeminiKeyInDotEnv() {
-        Path path = Paths.get(".").toAbsolutePath().normalize();
-        for (int i = 0; i < 5 && path != null; i++) {
-            Path envFile = path.resolve(".env");
-            if (Files.exists(envFile)) {
-                try {
-                    List<String> lines = Files.readAllLines(envFile);
-                    for (String line : lines) {
-                        String trimmed = line.trim();
-                        if (trimmed.startsWith("GEMINI_API_KEY=")) {
-                            String value = trimmed.substring("GEMINI_API_KEY=".length()).trim();
-                            if (!value.isBlank()) {
-                                return Optional.of(value);
-                            }
-                        }
-                    }
-                } catch (IOException ignored) {
-                }
-            }
-            path = path.getParent();
-        }
-        return Optional.empty();
+    static {
+        String url = System.getenv("AI_INSIGHT_URL");
+        INSIGHT_SERVICE_URL = (url != null && !url.isBlank()) ? url.trim() : "http://localhost:8001/insight";
     }
 
     @Override
@@ -75,14 +44,6 @@ public class AIInsightServlet extends HttpServlet {
         setCorsHeaders(response);
 
         JSONObject result = new JSONObject();
-
-        if (GEMINI_API_KEY == null || GEMINI_API_KEY.isBlank()) {
-            response.setStatus(503);
-            result.put("success", false);
-            result.put("message", "AI service is not configured. GEMINI_API_KEY is missing.");
-            response.getWriter().print(result);
-            return;
-        }
 
         StringBuilder sb = new StringBuilder();
         try (BufferedReader reader = request.getReader()) {
@@ -128,35 +89,66 @@ public class AIInsightServlet extends HttpServlet {
             return;
         }
 
-        try {
-            String code = body.optString("code", "").trim();
-            String problem = body.optString("problem", "").trim();
-            String verdict = body.optString("verdict", "").trim();
+        String code = body.optString("code", "").trim();
+        String problem = body.optString("problem", "").trim();
+        String verdict = body.optString("verdict", "").trim();
 
-            if (code.isEmpty()) {
-                response.setStatus(400);
+        if (code.isEmpty()) {
+            response.setStatus(400);
+            result.put("success", false);
+            result.put("message", "Code is required.");
+            response.getWriter().print(result);
+            return;
+        }
+
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("code", code);
+            payload.put("problem", problem);
+            payload.put("verdict", verdict);
+
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(INSIGHT_SERVICE_URL))
+                    .header("Content-Type", "application/json")
+                    .timeout(Duration.ofSeconds(120))
+                    .POST(HttpRequest.BodyPublishers.ofString(payload.toString()))
+                    .build();
+
+            HttpResponse<String> httpResponse = HTTP_CLIENT.send(
+                    httpRequest, HttpResponse.BodyHandlers.ofString());
+
+            System.out.println("[AI] Insight service status: " + httpResponse.statusCode());
+
+            JSONObject serviceResult = new JSONObject(httpResponse.body());
+
+            if (httpResponse.statusCode() != 200 || !serviceResult.optBoolean("success", false)) {
+                response.setStatus(httpResponse.statusCode() != 200 ? httpResponse.statusCode() : 502);
                 result.put("success", false);
-                result.put("message", "Code is required.");
+                result.put("message", serviceResult.optString("message",
+                        "AI insight service returned an error."));
                 response.getWriter().print(result);
                 return;
             }
 
-            String prompt = buildPrompt(code, problem, verdict);
-            String geminiResponse = callGemini(prompt);
-            JSONObject parsed = parseGeminiResponse(geminiResponse);
-
             result.put("success", true);
-            result.put("explanation", parsed.optString("explanation", "No explanation available."));
-            result.put("errorAnalysis", parsed.optString("errorAnalysis", ""));
-            result.put("errorFix", parsed.optString("errorFix", ""));
-            result.put("concepts", parsed.optString("concepts", ""));
-            result.put("timeComplex", parsed.optString("timeComplex", ""));
-            result.put("spaceComplex", parsed.optString("spaceComplex", ""));
-            result.put("complexity", parsed.optString("complexity", ""));
-            result.put("suggestions", parsed.optString("suggestions", ""));
-            result.put("optimizedCode", parsed.optString("optimizedCode", ""));
+            result.put("explanation", serviceResult.optString("explanation", "No explanation available."));
+            result.put("errorAnalysis", serviceResult.optString("errorAnalysis", ""));
+            result.put("errorFix", serviceResult.optString("errorFix", ""));
+            result.put("concepts", serviceResult.optString("concepts", ""));
+            result.put("timeComplex", serviceResult.optString("timeComplex", ""));
+            result.put("spaceComplex", serviceResult.optString("spaceComplex", ""));
+            result.put("complexity", serviceResult.optString("complexity", ""));
+            result.put("suggestions", serviceResult.optString("suggestions", ""));
+            result.put("optimizedCode", serviceResult.optString("optimizedCode", ""));
 
             System.out.println("[AI] Insight generated for user: " + username);
+
+        } catch (java.net.ConnectException e) {
+            response.setStatus(503);
+            result.put("success", false);
+            result.put("message", "Cannot connect to the local AI insight service at " + INSIGHT_SERVICE_URL
+                    + ". Start it with: python app.py (see backend/ai-service/README.md), "
+                    + "and make sure Ollama is running.");
         } catch (Exception e) {
             response.setStatus(500);
             result.put("success", false);
@@ -166,108 +158,6 @@ public class AIInsightServlet extends HttpServlet {
 
         response.getWriter().print(result);
         response.getWriter().flush();
-    }
-
-    private String buildPrompt(String code, String problem, String verdict) {
-        boolean hasError = verdict != null && (
-                verdict.contains("Error") || verdict.contains("TLE") || verdict.contains("Wrong")
-        );
-
-        String errorSection = hasError
-                ? "IMPORTANT: The code has a verdict of \"" + verdict + "\". You MUST:\n"
-                + "1. In \"errorAnalysis\": Clearly explain WHY this error is happening in simple words.\n"
-                + "   If it is a Compilation Error — explain the syntax mistake.\n"
-                + "   If it is a Runtime Error — explain what caused the crash (null pointer, array out of bounds, etc.).\n"
-                + "   If it is TLE — explain why the code is too slow and what approach to use.\n"
-                + "   If it is Wrong Answer — explain why the output does not match what was expected.\n"
-                + "2. In \"errorFix\": Give the corrected code with comments explaining what was changed and why.\n\n"
-                : "";
-
-        String problemLine = problem.isEmpty() ? "Not specified" : problem;
-        String verdictLine = verdict.isEmpty() ? "Not submitted yet" : verdict;
-
-        return "You are a friendly coding teacher explaining Java code to a complete beginner.\n"
-                + "Your goal is to make everything so simple that even someone who has never coded\n"
-                + "before can understand it. Use simple words, real-life analogies, and examples.\n"
-                + "Avoid technical jargon — if you must use a technical term, explain it immediately.\n\n"
-                + "Problem: " + problemLine + "\n"
-                + "Verdict: " + verdictLine + "\n\n"
-                + errorSection
-                + "Code to analyze:\n" + code + "\n\n"
-                + "Respond with ONLY this JSON (no markdown, no extra text).\n"
-                + "Use this exact structure:\n"
-                + "{\n"
-                + "  \"explanation\": \"...\",\n"
-                + "  \"errorAnalysis\": \"...\",\n"
-                + "  \"errorFix\": \"...\",\n"
-                + "  \"concepts\": \"...\",\n"
-                + "  \"timeComplex\": \"...\",\n"
-                + "  \"spaceComplex\": \"...\",\n"
-                + "  \"complexity\": \"...\",\n"
-                + "  \"suggestions\": \"...\",\n"
-                + "  \"optimizedCode\": \"...\"\n"
-                + "}";
-    }
-
-    private String callGemini(String prompt) throws Exception {
-        JSONObject requestBody = new JSONObject()
-                .put("contents", new JSONArray()
-                        .put(new JSONObject()
-                                .put("parts", new JSONArray()
-                                        .put(new JSONObject().put("text", prompt)))));
-
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create(GEMINI_URL))
-                .header("Content-Type", "application/json")
-                .timeout(Duration.ofSeconds(25))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .build();
-
-        HttpResponse<String> httpResponse = HTTP_CLIENT.send(
-                httpRequest, HttpResponse.BodyHandlers.ofString());
-
-        System.out.println("[AI] Gemini status: " + httpResponse.statusCode());
-
-        if (httpResponse.statusCode() != 200) {
-            throw new Exception("Gemini API returned HTTP " + httpResponse.statusCode()
-                    + ": " + httpResponse.body());
-        }
-
-        return httpResponse.body();
-    }
-
-    private JSONObject parseGeminiResponse(String rawResponse) throws Exception {
-        System.out.println("[AI] Raw response (first 500): "
-                + rawResponse.substring(0, Math.min(500, rawResponse.length())));
-
-        JSONObject root = new JSONObject(rawResponse);
-        if (root.has("error")) {
-            throw new Exception("Gemini error: " + root.getJSONObject("error").optString("message", rawResponse));
-        }
-
-        String text = root
-                .getJSONArray("candidates")
-                .getJSONObject(0)
-                .getJSONObject("content")
-                .getJSONArray("parts")
-                .getJSONObject(0)
-                .getString("text")
-                .trim();
-
-        text = text.replaceAll("(?s)```json\\s*", "").replaceAll("(?s)```", "").trim();
-
-        int start = text.indexOf("{");
-        int end = text.lastIndexOf("}");
-        if (start == -1 || end == -1 || end <= start) {
-            throw new Exception("Gemini response did not contain valid JSON. Got: "
-                    + text.substring(0, Math.min(200, text.length())));
-        }
-
-        text = text.substring(start, end + 1);
-        System.out.println("[AI] Parsed JSON (first 300): "
-                + text.substring(0, Math.min(300, text.length())));
-
-        return new JSONObject(text);
     }
 
     @Override

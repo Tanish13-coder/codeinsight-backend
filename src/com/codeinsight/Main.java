@@ -30,6 +30,7 @@ public class Main {
         ctx.addServletMappingDecoded("/login", "LoginServlet");
 
         Tomcat.addServlet(ctx, "RegisterServlet", new RegisterServlet());
+        ctx.addServletMappingDecoded("/register", "RegisterServlet");
         ctx.addServletMappingDecoded("/Register", "RegisterServlet");
 
         Tomcat.addServlet(ctx, "ProblemsServlet", new ProblemsServlet());
@@ -39,7 +40,7 @@ public class Main {
         ctx.addServletMappingDecoded("/submit", "SubmitServlet");
 
         Tomcat.addServlet(ctx, "RunServlet", new RunServlet());
-         ctx.addServletMappingDecoded("/run", "RunServlet");
+        ctx.addServletMappingDecoded("/run", "RunServlet");
 
         Tomcat.addServlet(ctx, "LeaderboardServlet", new LeaderboardServlet());
         ctx.addServletMappingDecoded("/leaderboard", "LeaderboardServlet");

@@ -1,3 +1,4 @@
+
 package com.codeinsight.servlet;
 
 import com.codeinsight.util.CodeRunner;
@@ -7,11 +8,9 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.PrintWriter;
-
 import org.json.JSONObject;
 
 public class RunServlet extends HttpServlet {
@@ -19,7 +18,6 @@ public class RunServlet extends HttpServlet {
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
-
         setCorsHeaders(response);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
@@ -33,17 +31,21 @@ public class RunServlet extends HttpServlet {
             result.put("success", false);
             result.put("message", "Please log in to run code.");
             out.print(result);
+            out.flush();
             return;
         }
 
         StringBuilder sb = new StringBuilder();
-        BufferedReader reader = request.getReader();
-        String line;
-        while ((line = reader.readLine()) != null) sb.append(line);
+        try (BufferedReader reader = request.getReader()) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line);
+            }
+        }
 
         try {
             JSONObject body = new JSONObject(sb.toString());
-            String code  = body.optString("code", "").trim();
+            String code = body.optString("code", "").trim();
             String input = body.optString("input", "");
 
             if (code.isEmpty()) {
@@ -51,21 +53,24 @@ public class RunServlet extends HttpServlet {
                 result.put("success", false);
                 result.put("message", "Code is required.");
                 out.print(result);
+                out.flush();
                 return;
             }
 
             RunResult runResult = CodeRunner.run(code, input);
 
             result.put("success", runResult.success);
-            result.put("output",  runResult.output);
-            result.put("error",   runResult.error);
+            result.put("output", runResult.output);
+            result.put("error", runResult.error);
             result.put("verdict", runResult.verdict);
             result.put("runtime", runResult.runtimeMs > 0 ? runResult.runtimeMs + " ms" : "-");
 
-            System.out.println("[Run] User=" + session.getAttribute("username")
-                    + " | Verdict=" + runResult.verdict
-                    + " | Runtime=" + runResult.runtimeMs + "ms");
-
+            Object username = session.getAttribute("username");
+            if (username != null) {
+                System.out.println("[Run] User=" + username
+                        + " | Verdict=" + runResult.verdict
+                        + " | Runtime=" + runResult.runtimeMs + "ms");
+            }
         } catch (Exception e) {
             response.setStatus(500);
             result.put("success", false);
