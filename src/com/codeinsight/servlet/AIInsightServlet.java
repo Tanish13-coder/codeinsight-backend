@@ -144,15 +144,12 @@ public class AIInsightServlet extends HttpServlet {
             System.out.println("[AI] Insight generated for user: " + username);
 
         } catch (java.net.ConnectException e) {
-            response.setStatus(503);
-            result.put("success", false);
-            result.put("message", "Cannot connect to the local AI insight service at " + INSIGHT_SERVICE_URL
-                    + ". Start it with: python app.py (see backend/ai-service/README.md), "
-                    + "and make sure Ollama is running.");
+            result = buildFallbackResult(code, problem, verdict, "The local AI service is currently unavailable, so a local fallback analysis is being returned.");
+            response.setStatus(200);
+            System.err.println("[AI] Falling back because the AI service is unreachable: " + e.getMessage());
         } catch (Exception e) {
-            response.setStatus(500);
-            result.put("success", false);
-            result.put("message", "AI service error: " + e.getMessage());
+            result = buildFallbackResult(code, problem, verdict, "The AI service returned an error, so a local fallback analysis is being returned.");
+            response.setStatus(200);
             System.err.println("[AI] Error: " + e.getMessage());
         }
 
@@ -175,5 +172,44 @@ public class AIInsightServlet extends HttpServlet {
                 : "http://localhost:5173";
         response.setHeader("Access-Control-Allow-Origin", origin);
         response.setHeader("Access-Control-Allow-Credentials", "true");
+    }
+
+    private JSONObject buildFallbackResult(String code, String problem, String verdict, String note) {
+        JSONObject fallback = new JSONObject();
+        fallback.put("success", true);
+        fallback.put("source", "local-fallback");
+        fallback.put("explanation", buildExplanation(code, problem, verdict));
+        fallback.put("errorAnalysis", buildErrorAnalysis(verdict, note));
+        fallback.put("errorFix", buildErrorFix(code));
+        fallback.put("concepts", "Input handling, loops, conditionals, output formatting");
+        fallback.put("timeComplex", "Estimate the runtime by counting dominant loops and recursive calls.");
+        fallback.put("spaceComplex", "Check whether the solution uses extra arrays, maps, or recursion that could be reduced.");
+        fallback.put("complexity", "Focus on simplifying the main logic and removing unnecessary repeated work.");
+        fallback.put("suggestions", "1. Validate edge cases\n2. Confirm the input/output format\n3. Simplify repeated work");
+        fallback.put("optimizedCode", buildErrorFix(code));
+        fallback.put("note", note);
+        return fallback;
+    }
+
+    private String buildExplanation(String code, String problem, String verdict) {
+        String problemText = (problem == null || problem.isBlank()) ? "the current coding challenge" : problem;
+        if (code == null || code.isBlank()) {
+            return "The editor is empty. Start by outlining the solution for " + problemText + " and then ask for analysis again.";
+        }
+        if (verdict != null && !verdict.isBlank()) {
+            return "Your code is being reviewed for " + problemText + ". The current verdict suggests the solution needs a closer look at logic, edge cases, or input/output handling.";
+        }
+        return "Your code is being reviewed for " + problemText + ". The main goal is to confirm the approach is clear, efficient, and correctly handles the problem requirements.";
+    }
+
+    private String buildErrorAnalysis(String verdict, String note) {
+        if (verdict != null && !verdict.isBlank()) {
+            return "The current verdict indicates the implementation needs debugging. Review the main logic, check for off-by-one mistakes, boundary cases, and confirm the output format matches the expected result. " + note;
+        }
+        return "No specific error verdict was provided. Review the core logic and test the solution with a few representative inputs. " + note;
+    }
+
+    private String buildErrorFix(String code) {
+        return "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n\n        // 1) Read the input safely\n        // 2) Solve the problem step by step\n        // 3) Print the final answer once\n\n        sc.close();\n    }\n}";
     }
 }

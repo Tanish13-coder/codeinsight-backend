@@ -10,12 +10,32 @@ import com.codeinsight.servlet.RunServlet;
 import com.codeinsight.filter.*;
 
 import java.io.File;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 
 public class Main {
 
+    private static int resolvePort(String preferredPort) throws IOException {
+        int port = Integer.parseInt(preferredPort);
+        for (int attempt = 0; attempt < 15; attempt++) {
+            try (ServerSocket socket = new ServerSocket()) {
+                socket.setReuseAddress(true);
+                socket.bind(new InetSocketAddress(port));
+                return port;
+            } catch (IOException ex) {
+                if (attempt == 14) {
+                    throw ex;
+                }
+                port++;
+            }
+        }
+        throw new IOException("Unable to find an available port");
+    }
+
     public static void main(String[] args) throws Exception {
 
-        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        int port = resolvePort(System.getenv().getOrDefault("PORT", "8080"));
 
         Tomcat tomcat = new Tomcat();
         tomcat.setPort(port);

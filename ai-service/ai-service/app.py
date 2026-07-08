@@ -58,26 +58,32 @@ def build_prompt(code: str, problem: str, verdict: str) -> str:
     verdict_line = verdict if verdict else "Not submitted yet"
 
     return (
-        "You are a friendly coding teacher explaining Java code to a complete beginner.\n"
-        "Your goal is to make everything so simple that even someone who has never coded\n"
-        "before can understand it. Use simple words, real-life analogies, and examples.\n"
-        "Avoid technical jargon - if you must use a technical term, explain it immediately.\n\n"
+        "You are an experienced Java code reviewer helping a learner. Be accurate and specific to\n"
+        "the ACTUAL code below - never give generic or boilerplate answers that could apply to any\n"
+        "code. Different fields need different styles, described exactly below:\n\n"
         f"Problem: {problem_line}\n"
         f"Verdict: {verdict_line}\n\n"
         f"{error_section}"
         f"Code to analyze:\n{code}\n\n"
         "Respond with ONLY this JSON (no markdown, no extra text, no ```json fences).\n"
-        "Use this exact structure:\n"
+        "Field-by-field instructions:\n"
         "{\n"
-        '  "explanation": "...",\n'
-        '  "errorAnalysis": "...",\n'
-        '  "errorFix": "...",\n'
-        '  "concepts": "...",\n'
-        '  "timeComplex": "...",\n'
-        '  "spaceComplex": "...",\n'
-        '  "complexity": "...",\n'
-        '  "suggestions": "...",\n'
-        '  "optimizedCode": "..."\n'
+        '  "explanation": beginner-friendly, plain-English walkthrough of what THIS code does,\n'
+        '     step by step, using simple words and a real-life analogy if it helps.\n'
+        '  "errorAnalysis": leave "" if there is no error; otherwise see instructions above.\n'
+        '  "errorFix": leave "" if there is no error; otherwise see instructions above.\n'
+        '  "concepts": list (comma-separated) the specific Java concepts/APIs THIS code uses\n'
+        '     (e.g. "HashMap, recursion, ArrayList") - not a generic CS glossary.\n'
+        '  "timeComplex": ONLY the Big-O notation, e.g. "O(n log n)". No explanation here.\n'
+        '  "spaceComplex": ONLY the Big-O notation, e.g. "O(n)". No explanation here.\n'
+        '  "complexity": 1-2 plain-English sentences explaining WHY the time/space complexity\n'
+        '     above is what it is, referencing the actual loops/data structures in the code.\n'
+        '  "suggestions": 2-3 concrete, specific improvements for THIS code (not generic advice\n'
+        '     like "add comments"), each as a short bullet-style sentence.\n'
+        '  "optimizedCode": a complete, valid, compilable Java version of the code with the\n'
+        "     improvements applied. Escape it correctly as a single JSON string (use \\n for\n"
+        "     newlines, escape any double quotes). If the code is already optimal, return it\n"
+        "     unchanged.\n"
         "}"
     )
 
@@ -103,7 +109,8 @@ def call_ollama(prompt: str) -> str:
         "stream": False,
         "format": "json",
         "options": {
-            "temperature": 0.3
+            "temperature": 0.3,
+            "num_predict": 1024
         }
     }
     resp = requests.post(OLLAMA_URL, json=payload, timeout=120)
