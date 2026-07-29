@@ -25,8 +25,8 @@ public class AIOptimizeServlet extends HttpServlet {
 
     static {
         String url = System.getenv("AI_OPTIMIZE_URL");
-        OPTIMIZE_SERVICE_URL = (url != null && !url.isBlank()) ? url.trim() : "http://localhost:8000/analyze";
-    }
+        OPTIMIZE_SERVICE_URL = (url != null && !url.isBlank()) ? url.trim() : "http://localhost:8001/analyze";
+}
 
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response)
@@ -84,7 +84,7 @@ public class AIOptimizeServlet extends HttpServlet {
             HttpRequest httpRequest = HttpRequest.newBuilder()
                     .uri(URI.create(OPTIMIZE_SERVICE_URL))
                     .header("Content-Type", "application/json")
-                    .timeout(Duration.ofSeconds(30))
+                    .timeout(Duration.ofSeconds(120))
                     .POST(HttpRequest.BodyPublishers.ofString(payload.toString()))
                     .build();
 

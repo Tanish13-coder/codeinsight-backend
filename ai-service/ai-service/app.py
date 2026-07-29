@@ -24,7 +24,7 @@ import os
 app = Flask(__name__)
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-MODEL_NAME = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:3b")
+MODEL_NAME = os.environ.get("OLLAMA_MODEL","qwen2.5-coder:1.5b")
 
 # Fields the Java servlet expects back, in this exact shape, every time.
 RESPONSE_FIELDS = [
@@ -166,6 +166,50 @@ def insight():
     for field in RESPONSE_FIELDS:
         result[field] = parsed.get(field, "")
 
+    result["success"] = True
+    return jsonify(result)
+
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    body = request.get_json(silent=True) or {}
+    code = (body.get("code") or "").strip()
+    problem = (body.get("problem") or "").strip()
+    verdict = (body.get("verdict") or "").strip()
+
+    if not code:
+        return jsonify({"success": False, "message": "Code is required."}), 400
+
+    prompt = build_prompt(code, problem, verdict)
+
+    try:
+        raw = call_ollama(prompt)
+    except requests.exceptions.ConnectionError:
+        return jsonify({
+            "success": False,
+            "message": f"Cannot reach Ollama at {OLLAMA_URL}. "
+                        f"Make sure Ollama is running (try: ollama serve) "
+                        f"and that you've pulled the model (ollama pull {MODEL_NAME})."
+        }), 503
+    except requests.exceptions.Timeout:
+        return jsonify({
+            "success": False,
+            "message": "The local model took too long to respond. "
+                        "Try a smaller model or a shorter code snippet."
+        }), 504
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Ollama request failed: {e}"}), 502
+
+    try:
+        parsed = extract_json(raw)
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Model did not return valid JSON: {e}"
+        }), 502
+
+    result = empty_result()
+    for field in RESPONSE_FIELDS:
+        result[field] = parsed.get(field, "")
     result["success"] = True
     return jsonify(result)
 
